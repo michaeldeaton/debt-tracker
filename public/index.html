@@ -3,10 +3,11 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Debt Tracker — Eaton</title>
+  <title>Finance Tracker — Eaton</title>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     body { background: #0c0e18; color: #e2e8f0; font-family: 'DM Sans', 'Segoe UI', sans-serif; }
@@ -14,16 +15,20 @@
     ::-webkit-scrollbar { width: 6px; }
     ::-webkit-scrollbar-track { background: #13162a; }
     ::-webkit-scrollbar-thumb { background: #2d3555; border-radius: 3px; }
+    .tab-btn { background: transparent; border: none; color: #475569; font-family: inherit; font-size: 12px; padding: 8px 16px; cursor: pointer; border-bottom: 2px solid transparent; letter-spacing: 0.05em; transition: all 0.15s; }
+    .tab-btn:hover { color: #94a3b8; }
+    .tab-btn.active { color: #e2e8f0; border-bottom-color: #74c0fc; }
+    select { background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.09); border-radius: 6px; color: #e2e8f0; padding: 5px 10px; font-family: inherit; font-size: 12px; outline: none; cursor: pointer; }
+    select option { background: #13162a; }
   </style>
 </head>
 <body>
   <div id="root"></div>
 
   <script type="text/babel">
-    const { useState, useMemo, useRef, useEffect } = React
+    const { useState, useMemo, useRef, useEffect, useCallback } = React
 
     // ── Constants ─────────────────────────────────────────────────────────────
-    // FIXED_BILLS excludes debt minimums — those are calculated live from the debt list
     const INCOME      = 11779.82
     const FIXED_BILLS = 8804.43
 
@@ -39,17 +44,54 @@
     ]
 
     const DEFAULT_CLEARED = [
-      { id: 99, name: "Zable", balance: 316.60, min: 30, clearedAt: "Mar 2026", note: "🎉 First one down!" }
+      { id: 99, name: "Zable", balance: 316.60, min: 30, clearedAt: "Mar 2026", note: "First one down!" }
     ]
 
-    // The only number you need to update manually — your monthly discretionary spend.
-    // Everything else (minimums, surplus) calculates itself.
     const DEFAULT_DISCRETIONARY = 2099
+
+    const CATEGORIES = [
+      "groceries","eating_out","transport","shopping","bills","entertainment",
+      "family","health","holidays","personal_care","savings","transfers","income","other"
+    ]
+
+    const CAT_COLORS = {
+      groceries: "#69db7c", eating_out: "#ffa94d", transport: "#74c0fc", shopping: "#ff8c69",
+      bills: "#ff6b6b", entertainment: "#b197fc", family: "#ffd97a", health: "#63e6be",
+      holidays: "#e599f7", personal_care: "#a9e34b", savings: "#4dabf7", transfers: "#868e96",
+      income: "#51cf66", other: "#ced4da", uncategorised: "#495057"
+    }
+
+    const CAT_LABELS = {
+      groceries: "Groceries", eating_out: "Eating Out", transport: "Transport", shopping: "Shopping",
+      bills: "Bills", entertainment: "Entertainment", family: "Family", health: "Health",
+      holidays: "Holidays", personal_care: "Personal Care", savings: "Savings", transfers: "Transfers",
+      income: "Income", other: "Other", uncategorised: "Uncategorised"
+    }
 
     // ── Helpers ───────────────────────────────────────────────────────────────
 
     function fmt(n) {
       return "£" + Number(n).toLocaleString("en-GB", { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+    }
+
+    function currentMonth() {
+      const d = new Date()
+      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`
+    }
+
+    function monthDisplay(ym) {
+      const [y, m] = ym.split("-")
+      return new Date(y, m - 1).toLocaleDateString("en-GB", { month: "long", year: "numeric" })
+    }
+
+    function prevMonth(ym) {
+      const [y, m] = ym.split("-").map(Number)
+      return m === 1 ? `${y - 1}-12` : `${y}-${String(m - 1).padStart(2, "0")}`
+    }
+
+    function nextMonth(ym) {
+      const [y, m] = ym.split("-").map(Number)
+      return m === 12 ? `${y + 1}-01` : `${y}-${String(m + 1).padStart(2, "0")}`
     }
 
     function runSnowball(debts, surplus) {
@@ -86,12 +128,8 @@
         setTimeout(() => ref.current?.select(), 0)
       }
       function commit() {
-        if (isName) {
-          onChange(draft.trim() || value)
-        } else {
-          const n = parseFloat(draft.replace(/[^0-9.]/g, ""))
-          if (!isNaN(n) && n >= 0) onChange(n)
-        }
+        if (isName) { onChange(draft.trim() || value) }
+        else { const n = parseFloat(draft.replace(/[^0-9.]/g, "")); if (!isNaN(n) && n >= 0) onChange(n) }
         setEditing(false)
       }
 
@@ -115,55 +153,232 @@
       )
     }
 
-    // ── App ───────────────────────────────────────────────────────────────────
+    // ── Donut Chart ──────────────────────────────────────────────────────────
 
-    function App() {
-      const [debts,         setDebts]         = useState(DEFAULT_DEBTS)
-      const [cleared,       setCleared]       = useState(DEFAULT_CLEARED)
-      const [discretionary, setDiscretionary] = useState(DEFAULT_DISCRETIONARY)
-      const [discDraft,     setDiscDraft]     = useState(String(DEFAULT_DISCRETIONARY))
-      const [showAdd,       setShowAdd]       = useState(false)
-      const [newDebt,       setNewDebt]       = useState({ name: "", balance: "", min: "", note: "" })
-      const [saveStatus,    setSaveStatus]    = useState("loading")
-      const [lastSaved,     setLastSaved]     = useState(null)
-      const saveTimer = useRef(null)
+    function DonutChart({ data }) {
+      const canvasRef = useRef()
+      const chartRef = useRef()
 
-      // ── Load ────────────────────────────────────────────────────────────────
       useEffect(() => {
-        fetch("/api/data")
-          .then(r => r.json())
-          .then(({ data, saved_at }) => {
-            if (data) {
-              if (data.debts)   setDebts(data.debts)
-              if (data.cleared) setCleared(data.cleared)
-              if (data.discretionary !== undefined) {
-                setDiscretionary(data.discretionary)
-                setDiscDraft(String(data.discretionary))
-              }
-              if (saved_at) setLastSaved(saved_at)
-            }
-            setSaveStatus("saved")
-          })
-          .catch(() => setSaveStatus("saved"))
-      }, [])
+        if (chartRef.current) chartRef.current.destroy()
+        if (!data.length) return
 
-      // ── Save ────────────────────────────────────────────────────────────────
-      function triggerSave(d, c, disc) {
-        setSaveStatus("saving")
-        clearTimeout(saveTimer.current)
-        saveTimer.current = setTimeout(() => {
-          fetch("/api/data", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ debts: d, cleared: c, discretionary: disc })
-          })
+        chartRef.current = new Chart(canvasRef.current, {
+          type: "doughnut",
+          data: {
+            labels: data.map(d => d.label),
+            datasets: [{
+              data: data.map(d => d.value),
+              backgroundColor: data.map(d => d.color),
+              borderWidth: 0,
+              hoverOffset: 4,
+            }]
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            cutout: "65%",
+            plugins: {
+              legend: { display: false },
+              tooltip: {
+                callbacks: {
+                  label: ctx => `${ctx.label}: ${fmt(ctx.parsed)}`
+                }
+              }
+            }
+          }
+        })
+
+        return () => { if (chartRef.current) chartRef.current.destroy() }
+      }, [data])
+
+      return <canvas ref={canvasRef} />
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════
+    // ── OVERVIEW TAB ─────────────────────────────────────────────────────────
+    // ══════════════════════════════════════════════════════════════════════════
+
+    function OverviewTab() {
+      const [month, setMonth] = useState(currentMonth())
+      const [account, setAccount] = useState("all")
+      const [txs, setTxs] = useState([])
+      const [loading, setLoading] = useState(true)
+
+      useEffect(() => {
+        setLoading(true)
+        fetch(`/api/transactions?month=${month}&account=${account}`)
           .then(r => r.json())
-          .then(({ saved_at }) => { setLastSaved(saved_at); setSaveStatus("saved") })
-          .catch(() => setSaveStatus("error"))
-        }, 800)
+          .then(data => { setTxs(data); setLoading(false) })
+          .catch(() => setLoading(false))
+      }, [month, account])
+
+      // Categorise handler
+      function setCat(txId, category) {
+        fetch(`/api/transactions/${txId}/category`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ category })
+        }).then(() => {
+          setTxs(prev => prev.map(t => t.id === txId ? { ...t, category } : t))
+        })
       }
 
-      // ── Mutators ────────────────────────────────────────────────────────────
+      // Split into income and outgoings
+      const income = txs.filter(t => t.amount > 0)
+      const outgoings = txs.filter(t => t.amount < 0)
+      const totalIncome = income.reduce((s, t) => s + t.amount, 0)
+      const totalOut = outgoings.reduce((s, t) => s + Math.abs(t.amount), 0)
+
+      // Group outgoings by category
+      const byCat = {}
+      outgoings.forEach(t => {
+        const cat = t.category || "uncategorised"
+        if (!byCat[cat]) byCat[cat] = { total: 0, txs: [] }
+        byCat[cat].total += Math.abs(t.amount)
+        byCat[cat].txs.push(t)
+      })
+
+      const sortedCats = Object.entries(byCat).sort((a, b) => b[1].total - a[1].total)
+
+      const chartData = sortedCats.map(([cat, { total }]) => ({
+        label: CAT_LABELS[cat] || cat,
+        value: total,
+        color: CAT_COLORS[cat] || "#666"
+      }))
+
+      const uncatCount = txs.filter(t => !t.category).length
+
+      const ACCOUNTS = [
+        { value: "all", label: "All Accounts" },
+        { value: "monzo", label: "Monzo" },
+        { value: "hsbc", label: "HSBC Current" },
+        { value: "hsbc_cc", label: "HSBC CC" },
+        { value: "lloyds", label: "Lloyds (Michael)" },
+        { value: "lloyds_amanda", label: "Lloyds (Amanda)" },
+      ]
+
+      return (
+        <div>
+          {/* Month picker + account filter */}
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <button onClick={() => setMonth(prevMonth(month))}
+                style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.09)", borderRadius: 6, color: "#94a3b8", padding: "5px 10px", cursor: "pointer", fontSize: 14 }}>
+                ‹
+              </button>
+              <span style={{ fontSize: 15, fontWeight: 600, color: "#f1f5f9", minWidth: 160, textAlign: "center" }}>
+                {monthDisplay(month)}
+              </span>
+              <button onClick={() => setMonth(nextMonth(month))}
+                style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.09)", borderRadius: 6, color: "#94a3b8", padding: "5px 10px", cursor: "pointer", fontSize: 14 }}>
+                ›
+              </button>
+            </div>
+            <select value={account} onChange={e => setAccount(e.target.value)}>
+              {ACCOUNTS.map(a => <option key={a.value} value={a.value}>{a.label}</option>)}
+            </select>
+          </div>
+
+          {loading ? (
+            <div style={{ textAlign: "center", padding: 40, color: "#475569" }}>Loading...</div>
+          ) : txs.length === 0 ? (
+            <div style={{ textAlign: "center", padding: 40, color: "#475569" }}>No transactions for {monthDisplay(month)}</div>
+          ) : (
+            <>
+              {/* Income vs Outgoings summary */}
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10, marginBottom: 20 }}>
+                {[
+                  { label: "Income", val: fmt(totalIncome), color: "#69db7c" },
+                  { label: "Outgoings", val: fmt(totalOut), color: "#ff6b6b" },
+                  { label: "Net", val: fmt(totalIncome - totalOut), color: totalIncome - totalOut >= 0 ? "#69db7c" : "#ff6b6b" },
+                ].map((card, i) => (
+                  <div key={i} style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 10, padding: "14px 16px" }}>
+                    <div style={{ fontSize: 10, color: "#475569", letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 6 }}>{card.label}</div>
+                    <div style={{ fontSize: 20, fontWeight: 700, color: card.color, fontFamily: "monospace" }}>{card.val}</div>
+                  </div>
+                ))}
+              </div>
+
+              {/* Chart + category breakdown */}
+              <div style={{ display: "grid", gridTemplateColumns: "200px 1fr", gap: 20, marginBottom: 24 }}>
+                <div style={{ height: 200 }}>
+                  <DonutChart data={chartData} />
+                </div>
+                <div>
+                  {sortedCats.map(([cat, { total, txs: catTxs }]) => (
+                    <div key={cat} style={{ display: "flex", alignItems: "center", gap: 10, padding: "5px 0", borderBottom: "1px solid rgba(255,255,255,0.04)" }}>
+                      <div style={{ width: 10, height: 10, borderRadius: "50%", background: CAT_COLORS[cat] || "#666", flexShrink: 0 }} />
+                      <div style={{ flex: 1, fontSize: 12, color: cat === "uncategorised" ? "#ffd97a" : "#e2e8f0" }}>
+                        {CAT_LABELS[cat] || cat}
+                      </div>
+                      <div style={{ fontSize: 11, color: "#64748b" }}>{catTxs.length} txns</div>
+                      <div style={{ fontFamily: "monospace", fontSize: 12, color: "#e2e8f0", minWidth: 80, textAlign: "right" }}>{fmt(total)}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* Uncategorised banner */}
+              {uncatCount > 0 && (
+                <div style={{ background: "rgba(255,217,122,0.06)", border: "1px solid rgba(255,217,122,0.15)", borderRadius: 7, padding: "10px 14px", marginBottom: 16, fontSize: 12, color: "#ffd97a" }}>
+                  {uncatCount} uncategorised transaction{uncatCount > 1 ? "s" : ""} — click a category below to assign
+                </div>
+              )}
+
+              {/* Transaction list */}
+              <div style={{ fontSize: 10, fontWeight: 600, color: "#475569", letterSpacing: "0.12em", textTransform: "uppercase", marginBottom: 8 }}>
+                Transactions ({txs.length})
+              </div>
+
+              {txs.map(tx => (
+                <div key={tx.id} style={{
+                  display: "grid", gridTemplateColumns: "80px 1fr 50px 90px",
+                  gap: 8, padding: "8px 10px", alignItems: "center",
+                  borderBottom: "1px solid rgba(255,255,255,0.04)",
+                  background: !tx.category ? "rgba(255,217,122,0.02)" : "transparent"
+                }}>
+                  <div style={{ fontSize: 11, color: "#64748b" }}>{tx.date.slice(8)}/{tx.date.slice(5,7)}</div>
+                  <div>
+                    <div style={{ fontSize: 12, color: "#e2e8f0", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                      {tx.description}
+                    </div>
+                    <div style={{ fontSize: 10, color: "#374151" }}>{tx.account}</div>
+                  </div>
+                  {/* Category picker */}
+                  <div>
+                    {tx.category ? (
+                      <span style={{ fontSize: 9, color: CAT_COLORS[tx.category] || "#666", background: "rgba(255,255,255,0.04)", borderRadius: 3, padding: "2px 5px" }}>
+                        {CAT_LABELS[tx.category] || tx.category}
+                      </span>
+                    ) : (
+                      <select value="" onChange={e => setCat(tx.id, e.target.value)}
+                        style={{ fontSize: 9, padding: "2px 4px", background: "rgba(255,217,122,0.08)", border: "1px solid rgba(255,217,122,0.2)", color: "#ffd97a", borderRadius: 3 }}>
+                        <option value="">assign</option>
+                        {CATEGORIES.map(c => <option key={c} value={c}>{CAT_LABELS[c]}</option>)}
+                      </select>
+                    )}
+                  </div>
+                  <div style={{ fontFamily: "monospace", fontSize: 12, textAlign: "right", color: tx.amount >= 0 ? "#69db7c" : "#e2e8f0" }}>
+                    {tx.amount >= 0 ? "+" : ""}{fmt(Math.abs(tx.amount))}
+                  </div>
+                </div>
+              ))}
+            </>
+          )}
+        </div>
+      )
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════
+    // ── DEBTS TAB ────────────────────────────────────────────────────────────
+    // ══════════════════════════════════════════════════════════════════════════
+
+    function DebtsTab({ debts, setDebts, cleared, setCleared, discretionary, setDiscretionary, discDraft, setDiscDraft, triggerSave }) {
+
+      const [showAdd, setShowAdd] = useState(false)
+      const [newDebt, setNewDebt] = useState({ name: "", balance: "", min: "", note: "" })
+
       function updateDebt(id, field, val) {
         setDebts(p => { const next = p.map(d => d.id === id ? { ...d, [field]: val } : d); triggerSave(next, cleared, discretionary); return next })
       }
@@ -172,9 +387,9 @@
       }
       function markCleared(id) {
         const debt = debts.find(d => d.id === id)
-        const at   = new Date().toLocaleDateString("en-GB", { month: "short", year: "numeric" })
-        const nc   = [...cleared, { ...debt, clearedAt: at }]
-        const nd   = debts.filter(d => d.id !== id)
+        const at = new Date().toLocaleDateString("en-GB", { month: "short", year: "numeric" })
+        const nc = [...cleared, { ...debt, clearedAt: at }]
+        const nd = debts.filter(d => d.id !== id)
         setCleared(nc); setDebts(nd); triggerSave(nd, nc, discretionary)
       }
       function unmarkCleared(id) {
@@ -195,10 +410,8 @@
         setDiscretionary(val); setDiscDraft(String(val)); triggerSave(debts, cleared, val)
       }
 
-      // ── Derived ─────────────────────────────────────────────────────────────
       const totalBalance  = debts.reduce((s, d) => s + d.balance, 0)
       const totalMin      = debts.reduce((s, d) => s + d.min, 0)
-      // Surplus auto-rises as debts are ticked off (totalMin shrinks)
       const surplus       = Math.max(0, INCOME - FIXED_BILLS - totalMin - discretionary)
       const sortedActive  = [...debts].sort((a, b) => a.balance - b.balance)
       const sbResult      = useMemo(() => runSnowball(debts, surplus), [debts, surplus])
@@ -214,224 +427,395 @@
       const colors = ["#ff6b6b","#ff8c69","#ffa94d","#ffd97a","#c0eb75","#69db7c","#4dabf7","#74c0fc"]
       const barMax = totalBalance > 0 ? totalBalance : 1
 
-      const saveLabel = saveStatus === "loading" ? "Loading…"
-                      : saveStatus === "saving"  ? "Saving…"
-                      : saveStatus === "error"   ? "⚠️ Save failed"
+      return (
+        <div>
+          {/* Summary cards */}
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 10, marginBottom: 16 }}>
+            {[
+              { label: "Total Remaining",  val: fmt(totalBalance), color: "#ff6b6b", sub: `${debts.length} debts` },
+              { label: "Monthly Minimums", val: fmt(totalMin),     color: "#ffd97a", sub: "auto-calculated" },
+              { label: "Snowball Surplus",  val: fmt(surplus),     color: "#69db7c", sub: "rolls up as debts clear" },
+              { label: "Debt Free",
+                val: debtFreeMonth ? monthLabel(debtFreeMonth) : debts.length === 0 ? "Done!" : "—",
+                color: "#74c0fc",
+                sub: debtFreeMonth ? `month ${debtFreeMonth}` : ""
+              },
+            ].map((card, i) => (
+              <div key={i} style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 10, padding: "14px 16px" }}>
+                <div style={{ fontSize: 10, color: "#475569", letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 8 }}>{card.label}</div>
+                <div style={{ fontSize: 20, fontWeight: 700, color: card.color, fontFamily: "monospace" }}>{card.val}</div>
+                <div style={{ fontSize: 10, color: "#374151", marginTop: 4 }}>{card.sub}</div>
+              </div>
+            ))}
+          </div>
+
+          {/* Surplus breakdown */}
+          <div style={{ background: "rgba(105,219,124,0.04)", border: "1px solid rgba(105,219,124,0.1)", borderRadius: 7, padding: "10px 14px", marginBottom: 20 }}>
+            <div style={{ fontSize: 11, color: "#64748b", display: "flex", gap: 14, flexWrap: "wrap", alignItems: "center" }}>
+              <span>Income <strong style={{ color: "#94a3b8", fontFamily: "monospace" }}>{fmt(INCOME)}</strong></span>
+              <span style={{ color: "#2d3748" }}>-</span>
+              <span>Fixed bills <strong style={{ color: "#94a3b8", fontFamily: "monospace" }}>{fmt(FIXED_BILLS)}</strong></span>
+              <span style={{ color: "#2d3748" }}>-</span>
+              <span>Minimums <strong style={{ color: "#ffd97a", fontFamily: "monospace" }}>{fmt(totalMin)}</strong></span>
+              <span style={{ color: "#2d3748" }}>-</span>
+              <span>
+                Discretionary{" "}
+                <span style={{ display: "inline-flex", alignItems: "baseline", gap: 1 }}>
+                  <strong style={{ color: "#94a3b8", fontFamily: "monospace" }}>£</strong>
+                  <input value={discDraft}
+                    onChange={e => setDiscDraft(e.target.value)}
+                    onBlur={() => { const n = parseFloat(discDraft); if (!isNaN(n) && n >= 0) setDiscAndSave(n) }}
+                    onKeyDown={e => { if (e.key === "Enter") { const n = parseFloat(discDraft); if (!isNaN(n)) setDiscAndSave(n) }}}
+                    style={{ background: "transparent", border: "none", borderBottom: "1px dashed rgba(255,200,80,0.4)", color: "#ffd97a", fontSize: 11, fontFamily: "monospace", fontWeight: 700, width: 54, outline: "none", padding: "0 1px" }}
+                  />
+                </span>
+              </span>
+              <span style={{ color: "#2d3748" }}>=</span>
+              <span>Surplus <strong style={{ color: "#69db7c", fontFamily: "monospace" }}>{fmt(surplus)}</strong></span>
+            </div>
+          </div>
+
+          {/* Debt table */}
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+            <div style={{ fontSize: 10, fontWeight: 600, color: "#475569", letterSpacing: "0.12em", textTransform: "uppercase" }}>
+              Active Debts · Snowball Order
+            </div>
+            <button onClick={() => setShowAdd(s => !s)}
+              style={{ background: "rgba(116,192,252,0.08)", border: "1px solid rgba(116,192,252,0.18)", borderRadius: 6, color: "#74c0fc", fontSize: 11, padding: "5px 12px", cursor: "pointer", fontFamily: "inherit" }}>
+              + Add debt
+            </button>
+          </div>
+
+          <div style={{ display: "grid", gridTemplateColumns: "2.2fr 1fr 1fr 1fr 1fr 68px", gap: 6, padding: "5px 12px", fontSize: 9, color: "#374151", letterSpacing: "0.1em", textTransform: "uppercase", borderBottom: "1px solid rgba(255,255,255,0.05)", marginBottom: 4 }}>
+            <span>Creditor</span>
+            <span style={{textAlign:"right"}}>Balance</span>
+            <span style={{textAlign:"right"}}>Min</span>
+            <span style={{textAlign:"right"}}>Clear date</span>
+            <span style={{textAlign:"right"}}>Month</span>
+            <span></span>
+          </div>
+
+          {debts.length === 0 && (
+            <div style={{ textAlign: "center", padding: "48px 0", color: "#374151", fontSize: 18 }}>All debts cleared!</div>
+          )}
+
+          {sortedActive.map((debt, idx) => {
+            const sb = sbResult.find(s => s.id === debt.id)
+            const cm = sb?.clearedMonth
+            const col = colors[idx % colors.length]
+            const isTarget = idx === 0
+            const pct = Math.max(3, (1 - debt.balance / barMax) * 100)
+
+            return (
+              <div key={debt.id} style={{
+                background: isTarget ? "rgba(255,107,107,0.04)" : "rgba(255,255,255,0.02)",
+                border: `1px solid ${isTarget ? "rgba(255,107,107,0.17)" : "rgba(255,255,255,0.055)"}`,
+                borderRadius: 8, marginBottom: 5, overflow: "hidden"
+              }}>
+                <div style={{ height: 2, background: "rgba(255,255,255,0.04)" }}>
+                  <div style={{ height: "100%", width: `${pct}%`, background: col, opacity: 0.5, transition: "width 0.5s ease" }} />
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: "2.2fr 1fr 1fr 1fr 1fr 68px", gap: 6, padding: "11px 12px", alignItems: "center" }}>
+                  <div>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: debt.note ? 2 : 0 }}>
+                      {isTarget && (
+                        <span style={{ fontSize: 8, background: "#ff6b6b", color: "#fff", borderRadius: 3, padding: "2px 5px", letterSpacing: "0.1em", textTransform: "uppercase", flexShrink: 0 }}>
+                          target
+                        </span>
+                      )}
+                      <EditableCell value={debt.name} isName onChange={v => updateDebt(debt.id, "name", v)} />
+                    </div>
+                    {debt.note && <div style={{ fontSize: 10, color: "#374151" }}>{debt.note}</div>}
+                  </div>
+                  <div style={{ textAlign: "right" }}><EditableCell value={debt.balance} onChange={v => updateDebt(debt.id, "balance", v)} /></div>
+                  <div style={{ textAlign: "right" }}>
+                    <EditableCell value={debt.min} onChange={v => updateDebt(debt.id, "min", v)} />
+                    <div style={{ fontSize: 9, color: "#374151" }}>/mo</div>
+                  </div>
+                  <div style={{ textAlign: "right", fontSize: 11, color: "#69db7c", fontFamily: "monospace" }}>{cm ? monthLabel(cm) : "—"}</div>
+                  <div style={{ textAlign: "right", fontFamily: "monospace", fontSize: 19, fontWeight: 700, color: col }}>{cm || "—"}</div>
+                  <div style={{ display: "flex", gap: 4, justifyContent: "center" }}>
+                    <button onClick={() => markCleared(debt.id)} title="Mark paid off"
+                      style={{ background: "rgba(105,219,124,0.08)", border: "1px solid rgba(105,219,124,0.2)", borderRadius: 5, color: "#69db7c", fontSize: 13, width: 26, height: 26, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                      ✓
+                    </button>
+                    <button onClick={() => removeDebt(debt.id)} title="Delete"
+                      style={{ background: "rgba(255,107,107,0.07)", border: "1px solid rgba(255,107,107,0.16)", borderRadius: 5, color: "#ff6b6b", fontSize: 14, width: 26, height: 26, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                      ×
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )
+          })}
+
+          {/* Add form */}
+          {showAdd && (
+            <div style={{ background: "rgba(116,192,252,0.04)", border: "1px solid rgba(116,192,252,0.16)", borderRadius: 8, padding: 14, marginTop: 6 }}>
+              <div style={{ fontSize: 11, fontWeight: 600, color: "#74c0fc", marginBottom: 10 }}>New debt</div>
+              <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr 2fr", gap: 8, marginBottom: 10 }}>
+                {[["Creditor name","name","text"],["Balance","balance","number"],["Min/month","min","number"],["Note (optional)","note","text"]].map(([ph, field, type]) => (
+                  <input key={field} placeholder={ph} type={type} value={newDebt[field]}
+                    onChange={e => setNewDebt(p => ({ ...p, [field]: e.target.value }))}
+                    style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.09)", borderRadius: 6, color: "#e2e8f0", padding: "7px 10px", fontFamily: "inherit", fontSize: 12, outline: "none" }}
+                  />
+                ))}
+              </div>
+              <div style={{ display: "flex", gap: 8 }}>
+                <button onClick={addDebt} style={{ background: "#74c0fc", border: "none", borderRadius: 6, color: "#0c0e18", padding: "7px 18px", fontWeight: 700, cursor: "pointer", fontFamily: "inherit", fontSize: 12 }}>Add</button>
+                <button onClick={() => setShowAdd(false)} style={{ background: "transparent", border: "1px solid rgba(255,255,255,0.09)", borderRadius: 6, color: "#6b7280", padding: "7px 14px", cursor: "pointer", fontFamily: "inherit", fontSize: 12 }}>Cancel</button>
+              </div>
+            </div>
+          )}
+
+          {/* Cleared */}
+          {cleared.length > 0 && (
+            <div style={{ marginTop: 30 }}>
+              <div style={{ fontSize: 10, fontWeight: 600, color: "#374151", letterSpacing: "0.12em", textTransform: "uppercase", marginBottom: 10 }}>Cleared</div>
+              {cleared.map(d => (
+                <div key={d.id} style={{ background: "rgba(105,219,124,0.03)", border: "1px solid rgba(105,219,124,0.09)", borderRadius: 7, padding: "9px 14px", marginBottom: 5, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <div>
+                    <span style={{ textDecoration: "line-through", color: "#4b5563", fontSize: 13 }}>{d.name}</span>
+                    {d.clearedAt && <span style={{ marginLeft: 10, fontSize: 10, color: "#69db7c" }}>✓ {d.clearedAt}</span>}
+                    {d.note && <div style={{ fontSize: 10, color: "#374151", marginTop: 2 }}>{d.note}</div>}
+                  </div>
+                  <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
+                    <span style={{ fontFamily: "monospace", fontSize: 11, color: "#374151" }}>{fmt(d.balance)}</span>
+                    <button onClick={() => unmarkCleared(d.id)}
+                      style={{ background: "transparent", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 4, color: "#4b5563", fontSize: 10, padding: "2px 8px", cursor: "pointer", fontFamily: "inherit" }}>
+                      restore
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════
+    // ── BILLS TAB ────────────────────────────────────────────────────────────
+    // ══════════════════════════════════════════════════════════════════════════
+
+    function BillsTab() {
+      const [txs, setTxs] = useState([])
+      const [loading, setLoading] = useState(true)
+
+      useEffect(() => {
+        // Fetch last 3 months of transactions to detect recurring payments
+        const months = [currentMonth(), prevMonth(currentMonth()), prevMonth(prevMonth(currentMonth()))]
+        Promise.all(months.map(m => fetch(`/api/transactions?month=${m}`).then(r => r.json())))
+          .then(results => { setTxs(results.flat()); setLoading(false) })
+          .catch(() => setLoading(false))
+      }, [])
+
+      // Detect recurring: same description appearing in 2+ months with similar amounts
+      const recurring = useMemo(() => {
+        if (!txs.length) return []
+
+        // Group by description (normalised)
+        const byDesc = {}
+        txs.forEach(t => {
+          if (t.amount >= 0) return // Only outgoings
+          const key = t.description.toLowerCase().replace(/\s+/g, " ").trim()
+          if (!byDesc[key]) byDesc[key] = []
+          byDesc[key].push(t)
+        })
+
+        const results = []
+        for (const [key, items] of Object.entries(byDesc)) {
+          // Get unique months
+          const months = new Set(items.map(t => t.date.slice(0, 7)))
+          if (months.size < 2) continue
+
+          const amounts = items.map(t => Math.abs(t.amount))
+          const avgAmount = amounts.reduce((a, b) => a + b, 0) / amounts.length
+          // Check amounts are similar (within 20%)
+          const consistent = amounts.every(a => Math.abs(a - avgAmount) / avgAmount < 0.2)
+          if (!consistent) continue
+
+          const latest = items.sort((a, b) => b.date.localeCompare(a.date))[0]
+          results.push({
+            description: latest.description,
+            amount: avgAmount,
+            account: latest.account,
+            lastDate: latest.date,
+            monthsSeen: months.size,
+            category: latest.category,
+          })
+        }
+
+        return results.sort((a, b) => b.amount - a.amount)
+      }, [txs])
+
+      const totalRecurring = recurring.reduce((s, r) => s + r.amount, 0)
+
+      // Known fixed bills (hardcoded from the debt tracker context)
+      const FIXED = [
+        { name: "Mortgage / Rent", amount: 0, note: "Included in fixed bills figure" },
+      ]
+
+      return (
+        <div>
+          {loading ? (
+            <div style={{ textAlign: "center", padding: 40, color: "#475569" }}>Analysing transaction history...</div>
+          ) : (
+            <>
+              {/* Summary */}
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 20 }}>
+                <div style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 10, padding: "14px 16px" }}>
+                  <div style={{ fontSize: 10, color: "#475569", letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 6 }}>Fixed Bills (Budget)</div>
+                  <div style={{ fontSize: 20, fontWeight: 700, color: "#ff8c69", fontFamily: "monospace" }}>{fmt(FIXED_BILLS)}</div>
+                  <div style={{ fontSize: 10, color: "#374151", marginTop: 4 }}>Hardcoded in budget</div>
+                </div>
+                <div style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 10, padding: "14px 16px" }}>
+                  <div style={{ fontSize: 10, color: "#475569", letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 6 }}>Detected Recurring</div>
+                  <div style={{ fontSize: 20, fontWeight: 700, color: "#ffa94d", fontFamily: "monospace" }}>{fmt(totalRecurring)}</div>
+                  <div style={{ fontSize: 10, color: "#374151", marginTop: 4 }}>{recurring.length} recurring payments found</div>
+                </div>
+              </div>
+
+              {/* Recurring payments */}
+              <div style={{ fontSize: 10, fontWeight: 600, color: "#475569", letterSpacing: "0.12em", textTransform: "uppercase", marginBottom: 10 }}>
+                Auto-Detected Recurring Payments
+              </div>
+              <div style={{ fontSize: 10, color: "#374151", marginBottom: 12 }}>
+                Based on last 3 months — same merchant, similar amount, appearing in 2+ months
+              </div>
+
+              {recurring.length === 0 ? (
+                <div style={{ textAlign: "center", padding: 30, color: "#374151", fontSize: 13 }}>
+                  Not enough transaction history yet. Import more statements to detect recurring payments.
+                </div>
+              ) : (
+                recurring.map((r, i) => (
+                  <div key={i} style={{ display: "grid", gridTemplateColumns: "1fr 80px 80px 60px", gap: 8, padding: "9px 12px", alignItems: "center", borderBottom: "1px solid rgba(255,255,255,0.04)" }}>
+                    <div>
+                      <div style={{ fontSize: 12, color: "#e2e8f0" }}>{r.description}</div>
+                      <div style={{ fontSize: 10, color: "#374151" }}>{r.account} · last: {r.lastDate}</div>
+                    </div>
+                    <div style={{ fontSize: 10, color: "#64748b", textAlign: "center" }}>
+                      {r.monthsSeen} months
+                    </div>
+                    <div>
+                      {r.category && (
+                        <span style={{ fontSize: 9, color: CAT_COLORS[r.category] || "#666", background: "rgba(255,255,255,0.04)", borderRadius: 3, padding: "2px 5px" }}>
+                          {CAT_LABELS[r.category] || r.category}
+                        </span>
+                      )}
+                    </div>
+                    <div style={{ fontFamily: "monospace", fontSize: 12, color: "#e2e8f0", textAlign: "right" }}>
+                      {fmt(r.amount)}
+                    </div>
+                  </div>
+                ))
+              )}
+            </>
+          )}
+        </div>
+      )
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════
+    // ── APP ──────────────────────────────────────────────────────────────────
+    // ══════════════════════════════════════════════════════════════════════════
+
+    function App() {
+      const [tab, setTab] = useState("overview")
+      const [debts, setDebts] = useState(DEFAULT_DEBTS)
+      const [cleared, setCleared] = useState(DEFAULT_CLEARED)
+      const [discretionary, setDiscretionary] = useState(DEFAULT_DISCRETIONARY)
+      const [discDraft, setDiscDraft] = useState(String(DEFAULT_DISCRETIONARY))
+      const [saveStatus, setSaveStatus] = useState("loading")
+      const [lastSaved, setLastSaved] = useState(null)
+      const saveTimer = useRef(null)
+
+      useEffect(() => {
+        fetch("/api/data")
+          .then(r => r.json())
+          .then(({ data, saved_at }) => {
+            if (data) {
+              if (data.debts) setDebts(data.debts)
+              if (data.cleared) setCleared(data.cleared)
+              if (data.discretionary !== undefined) {
+                setDiscretionary(data.discretionary)
+                setDiscDraft(String(data.discretionary))
+              }
+              if (saved_at) setLastSaved(saved_at)
+            }
+            setSaveStatus("saved")
+          })
+          .catch(() => setSaveStatus("saved"))
+      }, [])
+
+      function triggerSave(d, c, disc) {
+        setSaveStatus("saving")
+        clearTimeout(saveTimer.current)
+        saveTimer.current = setTimeout(() => {
+          fetch("/api/data", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ debts: d, cleared: c, discretionary: disc })
+          })
+          .then(r => r.json())
+          .then(({ saved_at }) => { setLastSaved(saved_at); setSaveStatus("saved") })
+          .catch(() => setSaveStatus("error"))
+        }, 800)
+      }
+
+      const saveLabel = saveStatus === "loading" ? "Loading..."
+                      : saveStatus === "saving"  ? "Saving..."
+                      : saveStatus === "error"   ? "Save failed"
                       : lastSaved ? `Saved ${new Date(lastSaved).toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit"})}`
                       : "Saved"
       const saveColor = saveStatus === "error" ? "#ff6b6b" : saveStatus === "saving" ? "#ffd97a" : "#374151"
 
-      // ── Render ───────────────────────────────────────────────────────────────
       return (
         <div style={{ minHeight: "100vh", paddingBottom: 60 }}>
 
           {/* Header */}
-          <div style={{ background: "linear-gradient(160deg,#13162a,#0e1020)", borderBottom: "1px solid rgba(255,255,255,0.06)", padding: "22px 28px 18px" }}>
-            <div style={{ maxWidth: 880, margin: "0 auto", display: "flex", justifyContent: "space-between", alignItems: "flex-end" }}>
-              <div>
-                <div style={{ fontSize: 10, letterSpacing: "0.18em", color: "#475569", marginBottom: 5, textTransform: "uppercase" }}>
-                  Michael & Amanda Eaton · Isle of Man
+          <div style={{ background: "linear-gradient(160deg,#13162a,#0e1020)", borderBottom: "1px solid rgba(255,255,255,0.06)", padding: "22px 28px 0" }}>
+            <div style={{ maxWidth: 880, margin: "0 auto" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", paddingBottom: 12 }}>
+                <div>
+                  <div style={{ fontSize: 10, letterSpacing: "0.18em", color: "#475569", marginBottom: 5, textTransform: "uppercase" }}>
+                    Michael & Amanda Eaton · Isle of Man
+                  </div>
+                  <h1 style={{ fontSize: 22, fontWeight: 700, color: "#f1f5f9", letterSpacing: "-0.3px" }}>
+                    Finance Tracker
+                  </h1>
                 </div>
-                <h1 style={{ fontSize: 22, fontWeight: 700, color: "#f1f5f9", letterSpacing: "-0.3px" }}>
-                  Debt Freedom Tracker
-                </h1>
-                <div style={{ marginTop: 3, fontSize: 11, color: "#475569" }}>
-                  Snowball method · tick a debt cleared and surplus rolls up automatically
-                </div>
+                <div style={{ fontSize: 10, color: saveColor, textAlign: "right" }}>{saveLabel}</div>
               </div>
-              <div style={{ fontSize: 10, color: saveColor, textAlign: "right" }}>{saveLabel}</div>
+
+              {/* Tab bar */}
+              <div style={{ display: "flex", gap: 0, borderTop: "1px solid rgba(255,255,255,0.04)" }}>
+                {[
+                  { key: "overview", label: "Overview" },
+                  { key: "debts", label: "Debts" },
+                  { key: "bills", label: "Bills" },
+                ].map(t => (
+                  <button key={t.key} className={`tab-btn ${tab === t.key ? "active" : ""}`} onClick={() => setTab(t.key)}>
+                    {t.label}
+                  </button>
+                ))}
+              </div>
             </div>
           </div>
 
           <div style={{ maxWidth: 880, margin: "0 auto", padding: "20px 28px" }}>
-
-            {/* Summary cards */}
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 10, marginBottom: 16 }}>
-              {[
-                { label: "Total Remaining",  val: fmt(totalBalance), color: "#ff6b6b", sub: `${debts.length} debts` },
-                { label: "Monthly Minimums", val: fmt(totalMin),     color: "#ffd97a", sub: "auto-calculated" },
-                { label: "Snowball Surplus",  val: fmt(surplus),     color: "#69db7c", sub: "rolls up as debts clear" },
-                { label: "Debt Free",
-                  val: debtFreeMonth ? monthLabel(debtFreeMonth) : debts.length === 0 ? "🎉 Done!" : "—",
-                  color: "#74c0fc",
-                  sub: debtFreeMonth ? `month ${debtFreeMonth}` : ""
-                },
-              ].map((card, i) => (
-                <div key={i} style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 10, padding: "14px 16px" }}>
-                  <div style={{ fontSize: 10, color: "#475569", letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 8 }}>
-                    {card.label}
-                  </div>
-                  <div style={{ fontSize: 20, fontWeight: 700, color: card.color, fontFamily: "monospace" }}>{card.val}</div>
-                  <div style={{ fontSize: 10, color: "#374151", marginTop: 4 }}>{card.sub}</div>
-                </div>
-              ))}
-            </div>
-
-            {/* Surplus breakdown — only editable field is Discretionary */}
-            <div style={{ background: "rgba(105,219,124,0.04)", border: "1px solid rgba(105,219,124,0.1)", borderRadius: 7, padding: "10px 14px", marginBottom: 20 }}>
-              <div style={{ fontSize: 11, color: "#64748b", display: "flex", gap: 14, flexWrap: "wrap", alignItems: "center" }}>
-                <span>Income <strong style={{ color: "#94a3b8", fontFamily: "monospace" }}>{fmt(INCOME)}</strong></span>
-                <span style={{ color: "#2d3748" }}>−</span>
-                <span>Fixed bills <strong style={{ color: "#94a3b8", fontFamily: "monospace" }}>{fmt(FIXED_BILLS)}</strong></span>
-                <span style={{ color: "#2d3748" }}>−</span>
-                <span>Minimums <strong style={{ color: "#ffd97a", fontFamily: "monospace" }}>{fmt(totalMin)}</strong></span>
-                <span style={{ color: "#2d3748" }}>−</span>
-                <span title="Edit this if your monthly spending changes">
-                  Discretionary{" "}
-                  <span style={{ display: "inline-flex", alignItems: "baseline", gap: 1 }}>
-                    <strong style={{ color: "#94a3b8", fontFamily: "monospace" }}>£</strong>
-                    <input value={discDraft}
-                      onChange={e => setDiscDraft(e.target.value)}
-                      onBlur={() => { const n = parseFloat(discDraft); if (!isNaN(n) && n >= 0) setDiscAndSave(n) }}
-                      onKeyDown={e => { if (e.key === "Enter") { const n = parseFloat(discDraft); if (!isNaN(n)) setDiscAndSave(n) }}}
-                      style={{ background: "transparent", border: "none", borderBottom: "1px dashed rgba(255,200,80,0.4)", color: "#ffd97a", fontSize: 11, fontFamily: "monospace", fontWeight: 700, width: 54, outline: "none", padding: "0 1px", cursor: "text" }}
-                    />
-                  </span>
-                </span>
-                <span style={{ color: "#2d3748" }}>=</span>
-                <span>Surplus <strong style={{ color: "#69db7c", fontFamily: "monospace" }}>{fmt(surplus)}</strong></span>
-              </div>
-              <div style={{ marginTop: 6, fontSize: 10, color: "#2d3748" }}>
-                Only the Discretionary figure needs editing — everything else updates automatically
-              </div>
-            </div>
-
-            {/* Debt table */}
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
-              <div style={{ fontSize: 10, fontWeight: 600, color: "#475569", letterSpacing: "0.12em", textTransform: "uppercase" }}>
-                Active Debts · Snowball Order
-              </div>
-              <button onClick={() => setShowAdd(s => !s)}
-                style={{ background: "rgba(116,192,252,0.08)", border: "1px solid rgba(116,192,252,0.18)", borderRadius: 6, color: "#74c0fc", fontSize: 11, padding: "5px 12px", cursor: "pointer", fontFamily: "inherit" }}>
-                + Add debt
-              </button>
-            </div>
-
-            <div style={{ display: "grid", gridTemplateColumns: "2.2fr 1fr 1fr 1fr 1fr 68px", gap: 6, padding: "5px 12px", fontSize: 9, color: "#374151", letterSpacing: "0.1em", textTransform: "uppercase", borderBottom: "1px solid rgba(255,255,255,0.05)", marginBottom: 4 }}>
-              <span>Creditor</span>
-              <span style={{textAlign:"right"}}>Balance</span>
-              <span style={{textAlign:"right"}}>Min</span>
-              <span style={{textAlign:"right"}}>Clear date</span>
-              <span style={{textAlign:"right"}}>Month</span>
-              <span></span>
-            </div>
-
-            {debts.length === 0 && (
-              <div style={{ textAlign: "center", padding: "48px 0", color: "#374151", fontSize: 18 }}>
-                🎉 All debts cleared — you're free!
-              </div>
+            {tab === "overview" && <OverviewTab />}
+            {tab === "debts" && (
+              <DebtsTab
+                debts={debts} setDebts={setDebts}
+                cleared={cleared} setCleared={setCleared}
+                discretionary={discretionary} setDiscretionary={setDiscretionary}
+                discDraft={discDraft} setDiscDraft={setDiscDraft}
+                triggerSave={triggerSave}
+              />
             )}
-
-            {sortedActive.map((debt, idx) => {
-              const sb       = sbResult.find(s => s.id === debt.id)
-              const cm       = sb?.clearedMonth
-              const col      = colors[idx % colors.length]
-              const isTarget = idx === 0
-              const pct      = Math.max(3, (1 - debt.balance / barMax) * 100)
-
-              return (
-                <div key={debt.id} style={{
-                  background: isTarget ? "rgba(255,107,107,0.04)" : "rgba(255,255,255,0.02)",
-                  border: `1px solid ${isTarget ? "rgba(255,107,107,0.17)" : "rgba(255,255,255,0.055)"}`,
-                  borderRadius: 8, marginBottom: 5, overflow: "hidden"
-                }}>
-                  <div style={{ height: 2, background: "rgba(255,255,255,0.04)" }}>
-                    <div style={{ height: "100%", width: `${pct}%`, background: col, opacity: 0.5, transition: "width 0.5s ease" }} />
-                  </div>
-                  <div style={{ display: "grid", gridTemplateColumns: "2.2fr 1fr 1fr 1fr 1fr 68px", gap: 6, padding: "11px 12px", alignItems: "center" }}>
-                    <div>
-                      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: debt.note ? 2 : 0 }}>
-                        {isTarget && (
-                          <span style={{ fontSize: 8, background: "#ff6b6b", color: "#fff", borderRadius: 3, padding: "2px 5px", letterSpacing: "0.1em", textTransform: "uppercase", flexShrink: 0 }}>
-                            target
-                          </span>
-                        )}
-                        <EditableCell value={debt.name} isName onChange={v => updateDebt(debt.id, "name", v)} />
-                      </div>
-                      {debt.note && <div style={{ fontSize: 10, color: "#374151" }}>{debt.note}</div>}
-                    </div>
-                    <div style={{ textAlign: "right" }}>
-                      <EditableCell value={debt.balance} onChange={v => updateDebt(debt.id, "balance", v)} />
-                    </div>
-                    <div style={{ textAlign: "right" }}>
-                      <EditableCell value={debt.min} onChange={v => updateDebt(debt.id, "min", v)} />
-                      <div style={{ fontSize: 9, color: "#374151" }}>/mo</div>
-                    </div>
-                    <div style={{ textAlign: "right", fontSize: 11, color: "#69db7c", fontFamily: "monospace" }}>
-                      {cm ? monthLabel(cm) : "—"}
-                    </div>
-                    <div style={{ textAlign: "right", fontFamily: "monospace", fontSize: 19, fontWeight: 700, color: col }}>
-                      {cm || "—"}
-                    </div>
-                    <div style={{ display: "flex", gap: 4, justifyContent: "center" }}>
-                      <button onClick={() => markCleared(debt.id)} title="Mark paid off"
-                        style={{ background: "rgba(105,219,124,0.08)", border: "1px solid rgba(105,219,124,0.2)", borderRadius: 5, color: "#69db7c", fontSize: 13, width: 26, height: 26, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>
-                        ✓
-                      </button>
-                      <button onClick={() => removeDebt(debt.id)} title="Delete"
-                        style={{ background: "rgba(255,107,107,0.07)", border: "1px solid rgba(255,107,107,0.16)", borderRadius: 5, color: "#ff6b6b", fontSize: 14, width: 26, height: 26, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>
-                        ×
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              )
-            })}
-
-            {/* Add form */}
-            {showAdd && (
-              <div style={{ background: "rgba(116,192,252,0.04)", border: "1px solid rgba(116,192,252,0.16)", borderRadius: 8, padding: 14, marginTop: 6 }}>
-                <div style={{ fontSize: 11, fontWeight: 600, color: "#74c0fc", marginBottom: 10 }}>New debt</div>
-                <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr 2fr", gap: 8, marginBottom: 10 }}>
-                  {[["Creditor name","name","text"],["Balance £","balance","number"],["Min £/month","min","number"],["Note (optional)","note","text"]].map(([ph, field, type]) => (
-                    <input key={field} placeholder={ph} type={type} value={newDebt[field]}
-                      onChange={e => setNewDebt(p => ({ ...p, [field]: e.target.value }))}
-                      style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.09)", borderRadius: 6, color: "#e2e8f0", padding: "7px 10px", fontFamily: "inherit", fontSize: 12, outline: "none" }}
-                    />
-                  ))}
-                </div>
-                <div style={{ display: "flex", gap: 8 }}>
-                  <button onClick={addDebt}
-                    style={{ background: "#74c0fc", border: "none", borderRadius: 6, color: "#0c0e18", padding: "7px 18px", fontWeight: 700, cursor: "pointer", fontFamily: "inherit", fontSize: 12 }}>
-                    Add
-                  </button>
-                  <button onClick={() => setShowAdd(false)}
-                    style={{ background: "transparent", border: "1px solid rgba(255,255,255,0.09)", borderRadius: 6, color: "#6b7280", padding: "7px 14px", cursor: "pointer", fontFamily: "inherit", fontSize: 12 }}>
-                    Cancel
-                  </button>
-                </div>
-              </div>
-            )}
-
-            {/* Cleared */}
-            {cleared.length > 0 && (
-              <div style={{ marginTop: 30 }}>
-                <div style={{ fontSize: 10, fontWeight: 600, color: "#374151", letterSpacing: "0.12em", textTransform: "uppercase", marginBottom: 10 }}>
-                  🎉 Cleared
-                </div>
-                {cleared.map(d => (
-                  <div key={d.id} style={{ background: "rgba(105,219,124,0.03)", border: "1px solid rgba(105,219,124,0.09)", borderRadius: 7, padding: "9px 14px", marginBottom: 5, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                    <div>
-                      <span style={{ textDecoration: "line-through", color: "#4b5563", fontSize: 13 }}>{d.name}</span>
-                      {d.clearedAt && <span style={{ marginLeft: 10, fontSize: 10, color: "#69db7c" }}>✓ {d.clearedAt}</span>}
-                      {d.note && <div style={{ fontSize: 10, color: "#374151", marginTop: 2 }}>{d.note}</div>}
-                    </div>
-                    <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
-                      <span style={{ fontFamily: "monospace", fontSize: 11, color: "#374151" }}>{fmt(d.balance)}</span>
-                      <button onClick={() => unmarkCleared(d.id)}
-                        style={{ background: "transparent", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 4, color: "#4b5563", fontSize: 10, padding: "2px 8px", cursor: "pointer", fontFamily: "inherit" }}>
-                        restore
-                      </button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-
-            <div style={{ marginTop: 36, fontSize: 10, color: "#1e2535", textAlign: "center", lineHeight: 1.8 }}>
-              Surplus = Income − Fixed bills − Debt minimums − Discretionary spend<br/>
-              Tick ✓ to clear a debt — surplus rises automatically · saves to local SQLite database
-            </div>
+            {tab === "bills" && <BillsTab />}
           </div>
         </div>
       )
