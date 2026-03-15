@@ -245,8 +245,10 @@
       }
 
       // Split into income and outgoings
-      const income = txs.filter(t => t.amount > 0)
-      const outgoings = txs.filter(t => t.amount < 0)
+      // Exclude transfers from totals and chart
+      const nonTransfers = txs.filter(t => t.category !== "transfers")
+      const income = nonTransfers.filter(t => t.amount > 0)
+      const outgoings = nonTransfers.filter(t => t.amount < 0)
       const totalIncome = income.reduce((s, t) => s + t.amount, 0)
       const totalOut = outgoings.reduce((s, t) => s + Math.abs(t.amount), 0)
 
