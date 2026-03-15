@@ -1,0 +1,443 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Debt Tracker — Eaton</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: #0c0e18; color: #e2e8f0; font-family: 'DM Sans', 'Segoe UI', sans-serif; }
+    input[type=number]::-webkit-inner-spin-button { -webkit-appearance: none; }
+    ::-webkit-scrollbar { width: 6px; }
+    ::-webkit-scrollbar-track { background: #13162a; }
+    ::-webkit-scrollbar-thumb { background: #2d3555; border-radius: 3px; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useMemo, useRef, useEffect } = React
+
+    // ── Constants ─────────────────────────────────────────────────────────────
+    // FIXED_BILLS excludes debt minimums — those are calculated live from the debt list
+    const INCOME      = 11779.82
+    const FIXED_BILLS = 8804.43
+
+    const DEFAULT_DEBTS = [
+      { id: 1, name: "Barclaycard",       balance: 265.48,  min: 20,  note: "" },
+      { id: 2, name: "Monzo Flex",        balance: 177.00,  min: 99,  note: "No interest" },
+      { id: 3, name: "HSBC Credit Card",  balance: 1429.13, min: 60,  note: "23.9% APR" },
+      { id: 4, name: "Marbles (Intrum)",  balance: 1932.92, min: 50,  note: "40% APR" },
+      { id: 5, name: "Lendable (Intrum)", balance: 2196.00, min: 79,  note: "Settlement — saves £2,368 vs £4,564" },
+      { id: 6, name: "Currys (Creation)", balance: 3779.21, min: 252, note: "2 accounts" },
+      { id: 7, name: "Manx Electricity",  balance: 5000.00, min: 500, note: "Includes electricity bill" },
+      { id: 8, name: "Manx Telecom",      balance: 4600.00, min: 500, note: "" },
+    ]
+
+    const DEFAULT_CLEARED = [
+      { id: 99, name: "Zable", balance: 316.60, min: 30, clearedAt: "Mar 2026", note: "🎉 First one down!" }
+    ]
+
+    // The only number you need to update manually — your monthly discretionary spend.
+    // Everything else (minimums, surplus) calculates itself.
+    const DEFAULT_DISCRETIONARY = 2099
+
+    // ── Helpers ───────────────────────────────────────────────────────────────
+
+    function fmt(n) {
+      return "£" + Number(n).toLocaleString("en-GB", { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+    }
+
+    function runSnowball(debts, surplus) {
+      if (!debts.length || surplus <= 0) return debts.map(d => ({ ...d, clearedMonth: null }))
+      const sorted = [...debts].sort((a, b) => a.balance - b.balance)
+      const state  = sorted.map(d => ({ ...d, bal: d.balance, clearedMonth: null }))
+      let month = 0
+      while (state.some(s => s.bal > 0.01) && month < 360) {
+        month++
+        let freed = 0
+        const targetIdx = state.findIndex(s => s.bal > 0.01)
+        for (let i = 0; i < state.length; i++) {
+          const s = state[i]
+          if (s.bal <= 0.01) { freed += s.min; continue }
+          let pay = s.min
+          if (i === targetIdx) { pay += surplus + freed; freed = 0 }
+          s.bal = Math.max(0, s.bal - pay)
+          if (s.bal <= 0.01 && s.clearedMonth === null) s.clearedMonth = month
+        }
+      }
+      return state
+    }
+
+    // ── Editable cell ─────────────────────────────────────────────────────────
+
+    function EditableCell({ value, onChange, isName = false }) {
+      const [editing, setEditing] = useState(false)
+      const [draft,   setDraft]   = useState("")
+      const ref = useRef()
+
+      function start() {
+        setDraft(isName ? value : String(value))
+        setEditing(true)
+        setTimeout(() => ref.current?.select(), 0)
+      }
+      function commit() {
+        if (isName) {
+          onChange(draft.trim() || value)
+        } else {
+          const n = parseFloat(draft.replace(/[^0-9.]/g, ""))
+          if (!isNaN(n) && n >= 0) onChange(n)
+        }
+        setEditing(false)
+      }
+
+      if (editing) return (
+        <input ref={ref} value={draft}
+          onChange={e => setDraft(e.target.value)}
+          onBlur={commit}
+          onKeyDown={e => { if (e.key === "Enter") commit(); if (e.key === "Escape") setEditing(false) }}
+          style={{ background: "rgba(255,200,80,0.12)", border: "1px solid rgba(255,200,80,0.5)", borderRadius: 4, color: "#ffd97a", padding: "2px 6px", fontFamily: isName ? "inherit" : "monospace", fontSize: "inherit", width: isName ? "160px" : "86px", outline: "none" }}
+        />
+      )
+
+      return (
+        <span onClick={start} title="Click to edit"
+          style={{ cursor: "pointer", borderBottom: "1px dashed rgba(255,255,255,0.18)", fontFamily: isName ? "inherit" : "monospace" }}
+          onMouseEnter={e => e.currentTarget.style.borderColor = "rgba(255,200,80,0.7)"}
+          onMouseLeave={e => e.currentTarget.style.borderColor = "rgba(255,255,255,0.18)"}
+        >
+          {isName ? value : fmt(value)}
+        </span>
+      )
+    }
+
+    // ── App ───────────────────────────────────────────────────────────────────
+
+    function App() {
+      const [debts,         setDebts]         = useState(DEFAULT_DEBTS)
+      const [cleared,       setCleared]       = useState(DEFAULT_CLEARED)
+      const [discretionary, setDiscretionary] = useState(DEFAULT_DISCRETIONARY)
+      const [discDraft,     setDiscDraft]     = useState(String(DEFAULT_DISCRETIONARY))
+      const [showAdd,       setShowAdd]       = useState(false)
+      const [newDebt,       setNewDebt]       = useState({ name: "", balance: "", min: "", note: "" })
+      const [saveStatus,    setSaveStatus]    = useState("loading")
+      const [lastSaved,     setLastSaved]     = useState(null)
+      const saveTimer = useRef(null)
+
+      // ── Load ────────────────────────────────────────────────────────────────
+      useEffect(() => {
+        fetch("/api/data")
+          .then(r => r.json())
+          .then(({ data, saved_at }) => {
+            if (data) {
+              if (data.debts)   setDebts(data.debts)
+              if (data.cleared) setCleared(data.cleared)
+              if (data.discretionary !== undefined) {
+                setDiscretionary(data.discretionary)
+                setDiscDraft(String(data.discretionary))
+              }
+              if (saved_at) setLastSaved(saved_at)
+            }
+            setSaveStatus("saved")
+          })
+          .catch(() => setSaveStatus("saved"))
+      }, [])
+
+      // ── Save ────────────────────────────────────────────────────────────────
+      function triggerSave(d, c, disc) {
+        setSaveStatus("saving")
+        clearTimeout(saveTimer.current)
+        saveTimer.current = setTimeout(() => {
+          fetch("/api/data", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ debts: d, cleared: c, discretionary: disc })
+          })
+          .then(r => r.json())
+          .then(({ saved_at }) => { setLastSaved(saved_at); setSaveStatus("saved") })
+          .catch(() => setSaveStatus("error"))
+        }, 800)
+      }
+
+      // ── Mutators ────────────────────────────────────────────────────────────
+      function updateDebt(id, field, val) {
+        setDebts(p => { const next = p.map(d => d.id === id ? { ...d, [field]: val } : d); triggerSave(next, cleared, discretionary); return next })
+      }
+      function removeDebt(id) {
+        setDebts(p => { const next = p.filter(d => d.id !== id); triggerSave(next, cleared, discretionary); return next })
+      }
+      function markCleared(id) {
+        const debt = debts.find(d => d.id === id)
+        const at   = new Date().toLocaleDateString("en-GB", { month: "short", year: "numeric" })
+        const nc   = [...cleared, { ...debt, clearedAt: at }]
+        const nd   = debts.filter(d => d.id !== id)
+        setCleared(nc); setDebts(nd); triggerSave(nd, nc, discretionary)
+      }
+      function unmarkCleared(id) {
+        const debt = cleared.find(d => d.id === id)
+        const { clearedAt, ...rest } = debt
+        const nd = [...debts, rest]
+        const nc = cleared.filter(d => d.id !== id)
+        setDebts(nd); setCleared(nc); triggerSave(nd, nc, discretionary)
+      }
+      function addDebt() {
+        const bal = parseFloat(newDebt.balance), min = parseFloat(newDebt.min)
+        if (!newDebt.name || isNaN(bal) || isNaN(min)) return
+        const nd = [...debts, { id: Date.now(), name: newDebt.name, balance: bal, min, note: newDebt.note }]
+        setDebts(nd); triggerSave(nd, cleared, discretionary)
+        setNewDebt({ name: "", balance: "", min: "", note: "" }); setShowAdd(false)
+      }
+      function setDiscAndSave(val) {
+        setDiscretionary(val); setDiscDraft(String(val)); triggerSave(debts, cleared, val)
+      }
+
+      // ── Derived ─────────────────────────────────────────────────────────────
+      const totalBalance  = debts.reduce((s, d) => s + d.balance, 0)
+      const totalMin      = debts.reduce((s, d) => s + d.min, 0)
+      // Surplus auto-rises as debts are ticked off (totalMin shrinks)
+      const surplus       = Math.max(0, INCOME - FIXED_BILLS - totalMin - discretionary)
+      const sortedActive  = [...debts].sort((a, b) => a.balance - b.balance)
+      const sbResult      = useMemo(() => runSnowball(debts, surplus), [debts, surplus])
+      const debtFreeMonth = useMemo(() => Math.max(0, ...sbResult.map(s => s.clearedMonth || 0)), [sbResult])
+
+      const now = new Date()
+      function monthLabel(m) {
+        if (!m) return "—"
+        const d = new Date(now.getFullYear(), now.getMonth() + m - 1, 1)
+        return d.toLocaleDateString("en-GB", { month: "short", year: "numeric" })
+      }
+
+      const colors = ["#ff6b6b","#ff8c69","#ffa94d","#ffd97a","#c0eb75","#69db7c","#4dabf7","#74c0fc"]
+      const barMax = totalBalance > 0 ? totalBalance : 1
+
+      const saveLabel = saveStatus === "loading" ? "Loading…"
+                      : saveStatus === "saving"  ? "Saving…"
+                      : saveStatus === "error"   ? "⚠️ Save failed"
+                      : lastSaved ? `Saved ${new Date(lastSaved).toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit"})}`
+                      : "Saved"
+      const saveColor = saveStatus === "error" ? "#ff6b6b" : saveStatus === "saving" ? "#ffd97a" : "#374151"
+
+      // ── Render ───────────────────────────────────────────────────────────────
+      return (
+        <div style={{ minHeight: "100vh", paddingBottom: 60 }}>
+
+          {/* Header */}
+          <div style={{ background: "linear-gradient(160deg,#13162a,#0e1020)", borderBottom: "1px solid rgba(255,255,255,0.06)", padding: "22px 28px 18px" }}>
+            <div style={{ maxWidth: 880, margin: "0 auto", display: "flex", justifyContent: "space-between", alignItems: "flex-end" }}>
+              <div>
+                <div style={{ fontSize: 10, letterSpacing: "0.18em", color: "#475569", marginBottom: 5, textTransform: "uppercase" }}>
+                  Michael & Amanda Eaton · Isle of Man
+                </div>
+                <h1 style={{ fontSize: 22, fontWeight: 700, color: "#f1f5f9", letterSpacing: "-0.3px" }}>
+                  Debt Freedom Tracker
+                </h1>
+                <div style={{ marginTop: 3, fontSize: 11, color: "#475569" }}>
+                  Snowball method · tick a debt cleared and surplus rolls up automatically
+                </div>
+              </div>
+              <div style={{ fontSize: 10, color: saveColor, textAlign: "right" }}>{saveLabel}</div>
+            </div>
+          </div>
+
+          <div style={{ maxWidth: 880, margin: "0 auto", padding: "20px 28px" }}>
+
+            {/* Summary cards */}
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 10, marginBottom: 16 }}>
+              {[
+                { label: "Total Remaining",  val: fmt(totalBalance), color: "#ff6b6b", sub: `${debts.length} debts` },
+                { label: "Monthly Minimums", val: fmt(totalMin),     color: "#ffd97a", sub: "auto-calculated" },
+                { label: "Snowball Surplus",  val: fmt(surplus),     color: "#69db7c", sub: "rolls up as debts clear" },
+                { label: "Debt Free",
+                  val: debtFreeMonth ? monthLabel(debtFreeMonth) : debts.length === 0 ? "🎉 Done!" : "—",
+                  color: "#74c0fc",
+                  sub: debtFreeMonth ? `month ${debtFreeMonth}` : ""
+                },
+              ].map((card, i) => (
+                <div key={i} style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 10, padding: "14px 16px" }}>
+                  <div style={{ fontSize: 10, color: "#475569", letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 8 }}>
+                    {card.label}
+                  </div>
+                  <div style={{ fontSize: 20, fontWeight: 700, color: card.color, fontFamily: "monospace" }}>{card.val}</div>
+                  <div style={{ fontSize: 10, color: "#374151", marginTop: 4 }}>{card.sub}</div>
+                </div>
+              ))}
+            </div>
+
+            {/* Surplus breakdown — only editable field is Discretionary */}
+            <div style={{ background: "rgba(105,219,124,0.04)", border: "1px solid rgba(105,219,124,0.1)", borderRadius: 7, padding: "10px 14px", marginBottom: 20 }}>
+              <div style={{ fontSize: 11, color: "#64748b", display: "flex", gap: 14, flexWrap: "wrap", alignItems: "center" }}>
+                <span>Income <strong style={{ color: "#94a3b8", fontFamily: "monospace" }}>{fmt(INCOME)}</strong></span>
+                <span style={{ color: "#2d3748" }}>−</span>
+                <span>Fixed bills <strong style={{ color: "#94a3b8", fontFamily: "monospace" }}>{fmt(FIXED_BILLS)}</strong></span>
+                <span style={{ color: "#2d3748" }}>−</span>
+                <span>Minimums <strong style={{ color: "#ffd97a", fontFamily: "monospace" }}>{fmt(totalMin)}</strong></span>
+                <span style={{ color: "#2d3748" }}>−</span>
+                <span title="Edit this if your monthly spending changes">
+                  Discretionary{" "}
+                  <span style={{ display: "inline-flex", alignItems: "baseline", gap: 1 }}>
+                    <strong style={{ color: "#94a3b8", fontFamily: "monospace" }}>£</strong>
+                    <input value={discDraft}
+                      onChange={e => setDiscDraft(e.target.value)}
+                      onBlur={() => { const n = parseFloat(discDraft); if (!isNaN(n) && n >= 0) setDiscAndSave(n) }}
+                      onKeyDown={e => { if (e.key === "Enter") { const n = parseFloat(discDraft); if (!isNaN(n)) setDiscAndSave(n) }}}
+                      style={{ background: "transparent", border: "none", borderBottom: "1px dashed rgba(255,200,80,0.4)", color: "#ffd97a", fontSize: 11, fontFamily: "monospace", fontWeight: 700, width: 54, outline: "none", padding: "0 1px", cursor: "text" }}
+                    />
+                  </span>
+                </span>
+                <span style={{ color: "#2d3748" }}>=</span>
+                <span>Surplus <strong style={{ color: "#69db7c", fontFamily: "monospace" }}>{fmt(surplus)}</strong></span>
+              </div>
+              <div style={{ marginTop: 6, fontSize: 10, color: "#2d3748" }}>
+                Only the Discretionary figure needs editing — everything else updates automatically
+              </div>
+            </div>
+
+            {/* Debt table */}
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+              <div style={{ fontSize: 10, fontWeight: 600, color: "#475569", letterSpacing: "0.12em", textTransform: "uppercase" }}>
+                Active Debts · Snowball Order
+              </div>
+              <button onClick={() => setShowAdd(s => !s)}
+                style={{ background: "rgba(116,192,252,0.08)", border: "1px solid rgba(116,192,252,0.18)", borderRadius: 6, color: "#74c0fc", fontSize: 11, padding: "5px 12px", cursor: "pointer", fontFamily: "inherit" }}>
+                + Add debt
+              </button>
+            </div>
+
+            <div style={{ display: "grid", gridTemplateColumns: "2.2fr 1fr 1fr 1fr 1fr 68px", gap: 6, padding: "5px 12px", fontSize: 9, color: "#374151", letterSpacing: "0.1em", textTransform: "uppercase", borderBottom: "1px solid rgba(255,255,255,0.05)", marginBottom: 4 }}>
+              <span>Creditor</span>
+              <span style={{textAlign:"right"}}>Balance</span>
+              <span style={{textAlign:"right"}}>Min</span>
+              <span style={{textAlign:"right"}}>Clear date</span>
+              <span style={{textAlign:"right"}}>Month</span>
+              <span></span>
+            </div>
+
+            {debts.length === 0 && (
+              <div style={{ textAlign: "center", padding: "48px 0", color: "#374151", fontSize: 18 }}>
+                🎉 All debts cleared — you're free!
+              </div>
+            )}
+
+            {sortedActive.map((debt, idx) => {
+              const sb       = sbResult.find(s => s.id === debt.id)
+              const cm       = sb?.clearedMonth
+              const col      = colors[idx % colors.length]
+              const isTarget = idx === 0
+              const pct      = Math.max(3, (1 - debt.balance / barMax) * 100)
+
+              return (
+                <div key={debt.id} style={{
+                  background: isTarget ? "rgba(255,107,107,0.04)" : "rgba(255,255,255,0.02)",
+                  border: `1px solid ${isTarget ? "rgba(255,107,107,0.17)" : "rgba(255,255,255,0.055)"}`,
+                  borderRadius: 8, marginBottom: 5, overflow: "hidden"
+                }}>
+                  <div style={{ height: 2, background: "rgba(255,255,255,0.04)" }}>
+                    <div style={{ height: "100%", width: `${pct}%`, background: col, opacity: 0.5, transition: "width 0.5s ease" }} />
+                  </div>
+                  <div style={{ display: "grid", gridTemplateColumns: "2.2fr 1fr 1fr 1fr 1fr 68px", gap: 6, padding: "11px 12px", alignItems: "center" }}>
+                    <div>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: debt.note ? 2 : 0 }}>
+                        {isTarget && (
+                          <span style={{ fontSize: 8, background: "#ff6b6b", color: "#fff", borderRadius: 3, padding: "2px 5px", letterSpacing: "0.1em", textTransform: "uppercase", flexShrink: 0 }}>
+                            target
+                          </span>
+                        )}
+                        <EditableCell value={debt.name} isName onChange={v => updateDebt(debt.id, "name", v)} />
+                      </div>
+                      {debt.note && <div style={{ fontSize: 10, color: "#374151" }}>{debt.note}</div>}
+                    </div>
+                    <div style={{ textAlign: "right" }}>
+                      <EditableCell value={debt.balance} onChange={v => updateDebt(debt.id, "balance", v)} />
+                    </div>
+                    <div style={{ textAlign: "right" }}>
+                      <EditableCell value={debt.min} onChange={v => updateDebt(debt.id, "min", v)} />
+                      <div style={{ fontSize: 9, color: "#374151" }}>/mo</div>
+                    </div>
+                    <div style={{ textAlign: "right", fontSize: 11, color: "#69db7c", fontFamily: "monospace" }}>
+                      {cm ? monthLabel(cm) : "—"}
+                    </div>
+                    <div style={{ textAlign: "right", fontFamily: "monospace", fontSize: 19, fontWeight: 700, color: col }}>
+                      {cm || "—"}
+                    </div>
+                    <div style={{ display: "flex", gap: 4, justifyContent: "center" }}>
+                      <button onClick={() => markCleared(debt.id)} title="Mark paid off"
+                        style={{ background: "rgba(105,219,124,0.08)", border: "1px solid rgba(105,219,124,0.2)", borderRadius: 5, color: "#69db7c", fontSize: 13, width: 26, height: 26, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                        ✓
+                      </button>
+                      <button onClick={() => removeDebt(debt.id)} title="Delete"
+                        style={{ background: "rgba(255,107,107,0.07)", border: "1px solid rgba(255,107,107,0.16)", borderRadius: 5, color: "#ff6b6b", fontSize: 14, width: 26, height: 26, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                        ×
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )
+            })}
+
+            {/* Add form */}
+            {showAdd && (
+              <div style={{ background: "rgba(116,192,252,0.04)", border: "1px solid rgba(116,192,252,0.16)", borderRadius: 8, padding: 14, marginTop: 6 }}>
+                <div style={{ fontSize: 11, fontWeight: 600, color: "#74c0fc", marginBottom: 10 }}>New debt</div>
+                <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr 2fr", gap: 8, marginBottom: 10 }}>
+                  {[["Creditor name","name","text"],["Balance £","balance","number"],["Min £/month","min","number"],["Note (optional)","note","text"]].map(([ph, field, type]) => (
+                    <input key={field} placeholder={ph} type={type} value={newDebt[field]}
+                      onChange={e => setNewDebt(p => ({ ...p, [field]: e.target.value }))}
+                      style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.09)", borderRadius: 6, color: "#e2e8f0", padding: "7px 10px", fontFamily: "inherit", fontSize: 12, outline: "none" }}
+                    />
+                  ))}
+                </div>
+                <div style={{ display: "flex", gap: 8 }}>
+                  <button onClick={addDebt}
+                    style={{ background: "#74c0fc", border: "none", borderRadius: 6, color: "#0c0e18", padding: "7px 18px", fontWeight: 700, cursor: "pointer", fontFamily: "inherit", fontSize: 12 }}>
+                    Add
+                  </button>
+                  <button onClick={() => setShowAdd(false)}
+                    style={{ background: "transparent", border: "1px solid rgba(255,255,255,0.09)", borderRadius: 6, color: "#6b7280", padding: "7px 14px", cursor: "pointer", fontFamily: "inherit", fontSize: 12 }}>
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Cleared */}
+            {cleared.length > 0 && (
+              <div style={{ marginTop: 30 }}>
+                <div style={{ fontSize: 10, fontWeight: 600, color: "#374151", letterSpacing: "0.12em", textTransform: "uppercase", marginBottom: 10 }}>
+                  🎉 Cleared
+                </div>
+                {cleared.map(d => (
+                  <div key={d.id} style={{ background: "rgba(105,219,124,0.03)", border: "1px solid rgba(105,219,124,0.09)", borderRadius: 7, padding: "9px 14px", marginBottom: 5, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <div>
+                      <span style={{ textDecoration: "line-through", color: "#4b5563", fontSize: 13 }}>{d.name}</span>
+                      {d.clearedAt && <span style={{ marginLeft: 10, fontSize: 10, color: "#69db7c" }}>✓ {d.clearedAt}</span>}
+                      {d.note && <div style={{ fontSize: 10, color: "#374151", marginTop: 2 }}>{d.note}</div>}
+                    </div>
+                    <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
+                      <span style={{ fontFamily: "monospace", fontSize: 11, color: "#374151" }}>{fmt(d.balance)}</span>
+                      <button onClick={() => unmarkCleared(d.id)}
+                        style={{ background: "transparent", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 4, color: "#4b5563", fontSize: 10, padding: "2px 8px", cursor: "pointer", fontFamily: "inherit" }}>
+                        restore
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <div style={{ marginTop: 36, fontSize: 10, color: "#1e2535", textAlign: "center", lineHeight: 1.8 }}>
+              Surplus = Income − Fixed bills − Debt minimums − Discretionary spend<br/>
+              Tick ✓ to clear a debt — surplus rises automatically · saves to local SQLite database
+            </div>
+          </div>
+        </div>
+      )
+    }
+
+    ReactDOM.createRoot(document.getElementById("root")).render(<App />)
+  </script>
+</body>
+</html>
