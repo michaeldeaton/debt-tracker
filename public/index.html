@@ -30,7 +30,27 @@
 
     // ── Constants ─────────────────────────────────────────────────────────────
     const INCOME      = 11779.82
-    const FIXED_BILLS = 8804.43
+
+    const DEFAULT_BILLS = [
+      { id: 1, name: "Rent (Sheila Ogilvie)", amount: 2800.00, account: "Monzo", category: "bills" },
+      { id: 2, name: "School Fees (King William's)", amount: 1855.20, account: "Lloyds (Amanda)", category: "family" },
+      { id: 3, name: "Cherry Godfrey (Loan)", amount: 610.98, account: "Lloyds", category: "bills" },
+      { id: 4, name: "Manx Electricity", amount: 500.00, account: "Lloyds", category: "bills", note: "Includes arrears (~£6k debt)" },
+      { id: 5, name: "Manx Telecom", amount: 500.00, account: "Lloyds", category: "bills", note: "Debt — paying £500/mo" },
+      { id: 6, name: "Sure IOM (Phone/Broadband)", amount: 266.00, account: "Lloyds", category: "bills" },
+      { id: 7, name: "Manx Gas", amount: 180.00, account: "Lloyds", category: "bills" },
+      { id: 8, name: "Sky Digital", amount: 111.99, account: "Lloyds", category: "entertainment" },
+      { id: 9, name: "Down South Hybrid (Gym)", amount: 100.00, account: "Monzo", category: "health" },
+      { id: 10, name: "NFU Mutual (House Insurance)", amount: 43.09, account: "Monzo", category: "bills" },
+      { id: 11, name: "M&S Sparks Pay", amount: 18.59, account: "Lloyds", category: "bills", note: "Debt" },
+      { id: 12, name: "TV Licence", amount: 13.25, account: "Lloyds", category: "bills" },
+      { id: 13, name: "Apple Subscriptions", amount: 12.98, account: "Monzo", category: "entertainment", note: "Multiple charges" },
+      { id: 14, name: "ID Mobile (Lucas)", amount: 7.50, account: "Lloyds", category: "bills" },
+      { id: 15, name: "O2 (Travel SIM)", amount: 8.00, account: "Monzo", category: "bills" },
+      { id: 16, name: "Monzo Perks", amount: 7.00, account: "Monzo", category: "bills" },
+      { id: 17, name: "D&G Appliance Care", amount: 5.99, account: "Monzo", category: "bills" },
+      { id: 18, name: "Lloyds Account Fee", amount: 15.00, account: "Lloyds", category: "bills" },
+    ]
 
     const DEFAULT_DEBTS = [
       { id: 1, name: "Barclaycard",       balance: 265.48,  min: 20,  note: "" },
@@ -374,7 +394,7 @@
     // ── DEBTS TAB ────────────────────────────────────────────────────────────
     // ══════════════════════════════════════════════════════════════════════════
 
-    function DebtsTab({ debts, setDebts, cleared, setCleared, discretionary, setDiscretionary, discDraft, setDiscDraft, triggerSave }) {
+    function DebtsTab({ debts, setDebts, cleared, setCleared, discretionary, setDiscretionary, discDraft, setDiscDraft, triggerSave, fixedBills }) {
 
       const [showAdd, setShowAdd] = useState(false)
       const [newDebt, setNewDebt] = useState({ name: "", balance: "", min: "", note: "" })
@@ -412,7 +432,7 @@
 
       const totalBalance  = debts.reduce((s, d) => s + d.balance, 0)
       const totalMin      = debts.reduce((s, d) => s + d.min, 0)
-      const surplus       = Math.max(0, INCOME - FIXED_BILLS - totalMin - discretionary)
+      const surplus       = Math.max(0, INCOME - fixedBills - totalMin - discretionary)
       const sortedActive  = [...debts].sort((a, b) => a.balance - b.balance)
       const sbResult      = useMemo(() => runSnowball(debts, surplus), [debts, surplus])
       const debtFreeMonth = useMemo(() => Math.max(0, ...sbResult.map(s => s.clearedMonth || 0)), [sbResult])
@@ -454,7 +474,7 @@
             <div style={{ fontSize: 11, color: "#64748b", display: "flex", gap: 14, flexWrap: "wrap", alignItems: "center" }}>
               <span>Income <strong style={{ color: "#94a3b8", fontFamily: "monospace" }}>{fmt(INCOME)}</strong></span>
               <span style={{ color: "#2d3748" }}>-</span>
-              <span>Fixed bills <strong style={{ color: "#94a3b8", fontFamily: "monospace" }}>{fmt(FIXED_BILLS)}</strong></span>
+              <span>Fixed bills <strong style={{ color: "#94a3b8", fontFamily: "monospace" }}>{fmt(fixedBills)}</strong></span>
               <span style={{ color: "#2d3748" }}>-</span>
               <span>Minimums <strong style={{ color: "#ffd97a", fontFamily: "monospace" }}>{fmt(totalMin)}</strong></span>
               <span style={{ color: "#2d3748" }}>-</span>
@@ -611,116 +631,108 @@
     // ── BILLS TAB ────────────────────────────────────────────────────────────
     // ══════════════════════════════════════════════════════════════════════════
 
-    function BillsTab() {
+    function BillsTab({ bills, setBills, triggerSave }) {
 
-      const BILLS = [
-        { name: "Rent (Sheila Ogilvie)", amount: 2800.00, account: "Monzo", category: "bills" },
-        { name: "School Fees (King William's)", amount: 1855.20, account: "Lloyds (Amanda)", category: "family" },
-        { name: "Cherry Godfrey (Loan)", amount: 610.98, account: "Lloyds", category: "bills" },
-        { name: "Manx Electricity", amount: 500.00, account: "Lloyds", category: "bills", note: "Includes arrears (~£6k debt)" },
-        { name: "Manx Telecom", amount: 500.00, account: "Lloyds", category: "bills", note: "Debt — paying £500/mo" },
-        { name: "Sure IOM (Phone/Broadband)", amount: 266.00, account: "Lloyds", category: "bills" },
-        { name: "Manx Gas", amount: 180.00, account: "Lloyds", category: "bills" },
-        { name: "Sky Digital", amount: 111.99, account: "Lloyds", category: "entertainment" },
-        { name: "Down South Hybrid (Gym)", amount: 100.00, account: "Monzo", category: "health" },
-        { name: "NFU Mutual (House Insurance)", amount: 43.09, account: "Monzo", category: "bills" },
-        { name: "M&S Sparks Pay", amount: 18.59, account: "Lloyds", category: "bills", note: "Debt" },
-        { name: "TV Licence", amount: 13.25, account: "Lloyds", category: "bills" },
-        { name: "Apple Subscriptions", amount: 12.98, account: "Monzo", category: "entertainment", note: "Multiple charges (iCloud, Apple TV, etc.)" },
-        { name: "ID Mobile (Lucas)", amount: 7.50, account: "Lloyds", category: "bills" },
-        { name: "O2 (Travel SIM)", amount: 8.00, account: "Monzo", category: "bills" },
-        { name: "Monzo Perks", amount: 7.00, account: "Monzo", category: "bills" },
-        { name: "D&G Appliance Care", amount: 5.99, account: "Monzo", category: "bills" },
-        { name: "Lloyds Account Fee", amount: 15.00, account: "Lloyds", category: "bills" },
-      ]
+      const [showAdd, setShowAdd] = useState(false)
+      const [newBill, setNewBill] = useState({ name: "", amount: "", account: "Monzo", note: "" })
 
-      const CANCEL = [
-        { name: "Xbox Game Pass", amount: 22.99, account: "Lloyds", category: "entertainment" },
-        { name: "GoCardless (GreenRunner)", amount: 2.20, account: "Monzo", category: "entertainment" },
-      ]
-
-      const totalBills = BILLS.reduce((s, b) => s + b.amount, 0)
-      const totalCancel = CANCEL.reduce((s, b) => s + b.amount, 0)
-
-      function BillRow({ bill, flagCancel }) {
-        return (
-          <div style={{
-            display: "grid", gridTemplateColumns: "1fr 100px 90px",
-            gap: 8, padding: "9px 12px", alignItems: "center",
-            borderBottom: "1px solid rgba(255,255,255,0.04)",
-            background: flagCancel ? "rgba(255,107,107,0.03)" : "transparent"
-          }}>
-            <div>
-              <div style={{ fontSize: 12, color: flagCancel ? "#ff8c69" : "#e2e8f0" }}>
-                {bill.name}
-                {flagCancel && <span style={{ marginLeft: 8, fontSize: 9, background: "rgba(255,107,107,0.15)", color: "#ff6b6b", borderRadius: 3, padding: "2px 6px" }}>CANCEL</span>}
-              </div>
-              <div style={{ fontSize: 10, color: "#374151" }}>
-                {bill.account}
-                {bill.note && <span style={{ marginLeft: 8, color: "#475569" }}>{bill.note}</span>}
-              </div>
-            </div>
-            <div>
-              <span style={{ fontSize: 9, color: CAT_COLORS[bill.category] || "#666", background: "rgba(255,255,255,0.04)", borderRadius: 3, padding: "2px 5px" }}>
-                {CAT_LABELS[bill.category] || bill.category}
-              </span>
-            </div>
-            <div style={{ fontFamily: "monospace", fontSize: 13, color: flagCancel ? "#ff8c69" : "#e2e8f0", textAlign: "right", fontWeight: 600 }}>
-              {fmt(bill.amount)}
-            </div>
-          </div>
-        )
+      function removeBill(id) {
+        setBills(prev => { const next = prev.filter(b => b.id !== id); triggerSave(null, null, null, next); return next })
       }
+
+      function addBill() {
+        const amount = parseFloat(newBill.amount)
+        if (!newBill.name || isNaN(amount) || amount <= 0) return
+        const bill = { id: Date.now(), name: newBill.name, amount, account: newBill.account, category: "bills", note: newBill.note }
+        setBills(prev => { const next = [...prev, bill]; triggerSave(null, null, null, next); return next })
+        setNewBill({ name: "", amount: "", account: "Monzo", note: "" })
+        setShowAdd(false)
+      }
+
+      const totalBills = bills.reduce((s, b) => s + b.amount, 0)
 
       return (
         <div>
           {/* Summary */}
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10, marginBottom: 20 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 20 }}>
             <div style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 10, padding: "14px 16px" }}>
               <div style={{ fontSize: 10, color: "#475569", letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 6 }}>Monthly Committed</div>
               <div style={{ fontSize: 20, fontWeight: 700, color: "#ff8c69", fontFamily: "monospace" }}>{fmt(totalBills)}</div>
-              <div style={{ fontSize: 10, color: "#374151", marginTop: 4 }}>{BILLS.length} payments</div>
+              <div style={{ fontSize: 10, color: "#374151", marginTop: 4 }}>{bills.length} payments</div>
             </div>
             <div style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 10, padding: "14px 16px" }}>
-              <div style={{ fontSize: 10, color: "#475569", letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 6 }}>To Cancel</div>
-              <div style={{ fontSize: 20, fontWeight: 700, color: "#ff6b6b", fontFamily: "monospace" }}>{fmt(totalCancel)}</div>
-              <div style={{ fontSize: 10, color: "#374151", marginTop: 4 }}>{CANCEL.length} subscriptions</div>
-            </div>
-            <div style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 10, padding: "14px 16px" }}>
-              <div style={{ fontSize: 10, color: "#475569", letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 6 }}>After Cancellations</div>
-              <div style={{ fontSize: 20, fontWeight: 700, color: "#69db7c", fontFamily: "monospace" }}>{fmt(totalBills - totalCancel)}</div>
-              <div style={{ fontSize: 10, color: "#374151", marginTop: 4 }}>saves {fmt(totalCancel)}/mo</div>
+              <div style={{ fontSize: 10, color: "#475569", letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 6 }}>Remaining After Bills</div>
+              <div style={{ fontSize: 20, fontWeight: 700, color: INCOME - totalBills > 0 ? "#69db7c" : "#ff6b6b", fontFamily: "monospace" }}>{fmt(INCOME - totalBills)}</div>
+              <div style={{ fontSize: 10, color: "#374151", marginTop: 4 }}>from {fmt(INCOME)} income</div>
             </div>
           </div>
 
-          {/* Bills list */}
-          <div style={{ fontSize: 10, fontWeight: 600, color: "#475569", letterSpacing: "0.12em", textTransform: "uppercase", marginBottom: 10 }}>
-            Monthly Committed Payments
+          {/* Bills list header */}
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+            <div style={{ fontSize: 10, fontWeight: 600, color: "#475569", letterSpacing: "0.12em", textTransform: "uppercase" }}>
+              Monthly Committed Payments
+            </div>
+            <button onClick={() => setShowAdd(s => !s)}
+              style={{ background: "rgba(116,192,252,0.08)", border: "1px solid rgba(116,192,252,0.18)", borderRadius: 6, color: "#74c0fc", fontSize: 11, padding: "5px 12px", cursor: "pointer", fontFamily: "inherit" }}>
+              + Add bill
+            </button>
           </div>
 
-          {BILLS.map((b, i) => <BillRow key={i} bill={b} />)}
-
-          {/* Total row */}
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 100px 90px", gap: 8, padding: "10px 12px", borderTop: "1px solid rgba(255,255,255,0.08)" }}>
-            <div style={{ fontSize: 12, fontWeight: 700, color: "#94a3b8" }}>Total</div>
-            <div></div>
-            <div style={{ fontFamily: "monospace", fontSize: 14, color: "#ff8c69", textAlign: "right", fontWeight: 700 }}>{fmt(totalBills)}</div>
-          </div>
-
-          {/* To cancel */}
-          {CANCEL.length > 0 && (
-            <div style={{ marginTop: 30 }}>
-              <div style={{ fontSize: 10, fontWeight: 600, color: "#ff6b6b", letterSpacing: "0.12em", textTransform: "uppercase", marginBottom: 10 }}>
-                To Cancel
+          {/* Add form */}
+          {showAdd && (
+            <div style={{ background: "rgba(116,192,252,0.04)", border: "1px solid rgba(116,192,252,0.16)", borderRadius: 8, padding: 14, marginBottom: 10 }}>
+              <div style={{ fontSize: 11, fontWeight: 600, color: "#74c0fc", marginBottom: 10 }}>New bill</div>
+              <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr 2fr", gap: 8, marginBottom: 10 }}>
+                <input placeholder="Bill name" value={newBill.name} onChange={e => setNewBill(p => ({ ...p, name: e.target.value }))}
+                  style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.09)", borderRadius: 6, color: "#e2e8f0", padding: "7px 10px", fontFamily: "inherit", fontSize: 12, outline: "none" }} />
+                <input placeholder="Amount" type="number" value={newBill.amount} onChange={e => setNewBill(p => ({ ...p, amount: e.target.value }))}
+                  style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.09)", borderRadius: 6, color: "#e2e8f0", padding: "7px 10px", fontFamily: "inherit", fontSize: 12, outline: "none" }} />
+                <select value={newBill.account} onChange={e => setNewBill(p => ({ ...p, account: e.target.value }))}>
+                  <option value="Monzo">Monzo</option>
+                  <option value="Lloyds">Lloyds</option>
+                  <option value="Lloyds (Amanda)">Lloyds (Amanda)</option>
+                  <option value="HSBC">HSBC</option>
+                </select>
+                <input placeholder="Note (optional)" value={newBill.note} onChange={e => setNewBill(p => ({ ...p, note: e.target.value }))}
+                  style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.09)", borderRadius: 6, color: "#e2e8f0", padding: "7px 10px", fontFamily: "inherit", fontSize: 12, outline: "none" }} />
               </div>
-              {CANCEL.map((b, i) => <BillRow key={i} bill={b} flagCancel />)}
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 100px 90px", gap: 8, padding: "10px 12px", borderTop: "1px solid rgba(255,255,255,0.08)" }}>
-                <div style={{ fontSize: 12, fontWeight: 700, color: "#94a3b8" }}>Potential saving</div>
-                <div></div>
-                <div style={{ fontFamily: "monospace", fontSize: 14, color: "#69db7c", textAlign: "right", fontWeight: 700 }}>{fmt(totalCancel)}/mo</div>
+              <div style={{ display: "flex", gap: 8 }}>
+                <button onClick={addBill} style={{ background: "#74c0fc", border: "none", borderRadius: 6, color: "#0c0e18", padding: "7px 18px", fontWeight: 700, cursor: "pointer", fontFamily: "inherit", fontSize: 12 }}>Add</button>
+                <button onClick={() => setShowAdd(false)} style={{ background: "transparent", border: "1px solid rgba(255,255,255,0.09)", borderRadius: 6, color: "#6b7280", padding: "7px 14px", cursor: "pointer", fontFamily: "inherit", fontSize: 12 }}>Cancel</button>
               </div>
             </div>
           )}
+
+          {/* Bills list */}
+          {bills.map(bill => (
+            <div key={bill.id} style={{
+              display: "grid", gridTemplateColumns: "1fr 90px 32px",
+              gap: 8, padding: "9px 12px", alignItems: "center",
+              borderBottom: "1px solid rgba(255,255,255,0.04)"
+            }}>
+              <div>
+                <div style={{ fontSize: 12, color: "#e2e8f0" }}>{bill.name}</div>
+                <div style={{ fontSize: 10, color: "#374151" }}>
+                  {bill.account}
+                  {bill.note && <span style={{ marginLeft: 8, color: "#475569" }}>{bill.note}</span>}
+                </div>
+              </div>
+              <div style={{ fontFamily: "monospace", fontSize: 13, color: "#e2e8f0", textAlign: "right", fontWeight: 600 }}>
+                {fmt(bill.amount)}
+              </div>
+              <button onClick={() => removeBill(bill.id)} title="Remove"
+                style={{ background: "rgba(255,107,107,0.07)", border: "1px solid rgba(255,107,107,0.16)", borderRadius: 5, color: "#ff6b6b", fontSize: 14, width: 26, height: 26, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                ×
+              </button>
+            </div>
+          ))}
+
+          {/* Total row */}
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 90px 32px", gap: 8, padding: "10px 12px", borderTop: "1px solid rgba(255,255,255,0.08)" }}>
+            <div style={{ fontSize: 12, fontWeight: 700, color: "#94a3b8" }}>Total</div>
+            <div style={{ fontFamily: "monospace", fontSize: 14, color: "#ff8c69", textAlign: "right", fontWeight: 700 }}>{fmt(totalBills)}</div>
+            <div></div>
+          </div>
         </div>
       )
     }
@@ -735,9 +747,13 @@
       const [cleared, setCleared] = useState(DEFAULT_CLEARED)
       const [discretionary, setDiscretionary] = useState(DEFAULT_DISCRETIONARY)
       const [discDraft, setDiscDraft] = useState(String(DEFAULT_DISCRETIONARY))
+      const [bills, setBills] = useState(DEFAULT_BILLS)
       const [saveStatus, setSaveStatus] = useState("loading")
       const [lastSaved, setLastSaved] = useState(null)
       const saveTimer = useRef(null)
+
+      // Computed fixed bills total from bills list — feeds into Debts tab
+      const fixedBills = bills.reduce((s, b) => s + b.amount, 0)
 
       useEffect(() => {
         fetch("/api/data")
@@ -750,6 +766,7 @@
                 setDiscretionary(data.discretionary)
                 setDiscDraft(String(data.discretionary))
               }
+              if (data.bills) setBills(data.bills)
               if (saved_at) setLastSaved(saved_at)
             }
             setSaveStatus("saved")
@@ -757,14 +774,19 @@
           .catch(() => setSaveStatus("saved"))
       }, [])
 
-      function triggerSave(d, c, disc) {
+      // triggerSave: pass null for any param to use current state value
+      function triggerSave(d, c, disc, b) {
+        const saveDebts = d !== null && d !== undefined ? d : debts
+        const saveCleared = c !== null && c !== undefined ? c : cleared
+        const saveDisc = disc !== null && disc !== undefined ? disc : discretionary
+        const saveBills = b !== null && b !== undefined ? b : bills
         setSaveStatus("saving")
         clearTimeout(saveTimer.current)
         saveTimer.current = setTimeout(() => {
           fetch("/api/data", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ debts: d, cleared: c, discretionary: disc })
+            body: JSON.stringify({ debts: saveDebts, cleared: saveCleared, discretionary: saveDisc, bills: saveBills })
           })
           .then(r => r.json())
           .then(({ saved_at }) => { setLastSaved(saved_at); setSaveStatus("saved") })
@@ -820,10 +842,10 @@
                 cleared={cleared} setCleared={setCleared}
                 discretionary={discretionary} setDiscretionary={setDiscretionary}
                 discDraft={discDraft} setDiscDraft={setDiscDraft}
-                triggerSave={triggerSave}
+                triggerSave={triggerSave} fixedBills={fixedBills}
               />
             )}
-            {tab === "bills" && <BillsTab />}
+            {tab === "bills" && <BillsTab bills={bills} setBills={setBills} triggerSave={triggerSave} />}
           </div>
         </div>
       )
