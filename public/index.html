@@ -486,10 +486,11 @@
             </button>
           </div>
 
-          <div style={{ display: "grid", gridTemplateColumns: "2.2fr 1fr 1fr 1fr 1fr 68px", gap: 6, padding: "5px 12px", fontSize: 9, color: "#374151", letterSpacing: "0.1em", textTransform: "uppercase", borderBottom: "1px solid rgba(255,255,255,0.05)", marginBottom: 4 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "2.2fr 1fr 1fr 1fr 1fr 1fr 68px", gap: 6, padding: "5px 12px", fontSize: 9, color: "#374151", letterSpacing: "0.1em", textTransform: "uppercase", borderBottom: "1px solid rgba(255,255,255,0.05)", marginBottom: 4 }}>
             <span>Creditor</span>
             <span style={{textAlign:"right"}}>Balance</span>
             <span style={{textAlign:"right"}}>Min</span>
+            <span style={{textAlign:"right"}}>Pay this month</span>
             <span style={{textAlign:"right"}}>Clear date</span>
             <span style={{textAlign:"right"}}>Month</span>
             <span></span>
@@ -515,7 +516,7 @@
                 <div style={{ height: 2, background: "rgba(255,255,255,0.04)" }}>
                   <div style={{ height: "100%", width: `${pct}%`, background: col, opacity: 0.5, transition: "width 0.5s ease" }} />
                 </div>
-                <div style={{ display: "grid", gridTemplateColumns: "2.2fr 1fr 1fr 1fr 1fr 68px", gap: 6, padding: "11px 12px", alignItems: "center" }}>
+                <div style={{ display: "grid", gridTemplateColumns: "2.2fr 1fr 1fr 1fr 1fr 1fr 68px", gap: 6, padding: "11px 12px", alignItems: "center" }}>
                   <div>
                     <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: debt.note ? 2 : 0 }}>
                       {isTarget && (
@@ -531,6 +532,18 @@
                   <div style={{ textAlign: "right" }}>
                     <EditableCell value={debt.min} onChange={v => updateDebt(debt.id, "min", v)} />
                     <div style={{ fontSize: 9, color: "#374151" }}>/mo</div>
+                  </div>
+                  <div style={{ textAlign: "right" }}>
+                    {(() => {
+                      const payment = isTarget ? debt.min + surplus : debt.min
+                      const capped = Math.min(payment, debt.balance)
+                      return (
+                        <div>
+                          <div style={{ fontFamily: "monospace", fontSize: 13, fontWeight: 700, color: isTarget ? "#69db7c" : "#94a3b8" }}>{fmt(capped)}</div>
+                          {isTarget && surplus > 0 && <div style={{ fontSize: 9, color: "#475569" }}>{fmt(debt.min)} + {fmt(surplus)}</div>}
+                        </div>
+                      )
+                    })()}
                   </div>
                   <div style={{ textAlign: "right", fontSize: 11, color: "#69db7c", fontFamily: "monospace" }}>{cm ? monthLabel(cm) : "—"}</div>
                   <div style={{ textAlign: "right", fontFamily: "monospace", fontSize: 19, fontWeight: 700, color: col }}>{cm || "—"}</div>
