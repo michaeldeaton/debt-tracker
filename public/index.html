@@ -612,119 +612,114 @@
     // ══════════════════════════════════════════════════════════════════════════
 
     function BillsTab() {
-      const [txs, setTxs] = useState([])
-      const [loading, setLoading] = useState(true)
 
-      useEffect(() => {
-        // Fetch last 3 months of transactions to detect recurring payments
-        const months = [currentMonth(), prevMonth(currentMonth()), prevMonth(prevMonth(currentMonth()))]
-        Promise.all(months.map(m => fetch(`/api/transactions?month=${m}`).then(r => r.json())))
-          .then(results => { setTxs(results.flat()); setLoading(false) })
-          .catch(() => setLoading(false))
-      }, [])
-
-      // Detect recurring: same description appearing in 2+ months with similar amounts
-      const recurring = useMemo(() => {
-        if (!txs.length) return []
-
-        // Group by description (normalised)
-        const byDesc = {}
-        txs.forEach(t => {
-          if (t.amount >= 0) return // Only outgoings
-          const key = t.description.toLowerCase().replace(/\s+/g, " ").trim()
-          if (!byDesc[key]) byDesc[key] = []
-          byDesc[key].push(t)
-        })
-
-        const results = []
-        for (const [key, items] of Object.entries(byDesc)) {
-          // Get unique months
-          const months = new Set(items.map(t => t.date.slice(0, 7)))
-          if (months.size < 2) continue
-
-          const amounts = items.map(t => Math.abs(t.amount))
-          const avgAmount = amounts.reduce((a, b) => a + b, 0) / amounts.length
-          // Check amounts are similar (within 20%)
-          const consistent = amounts.every(a => Math.abs(a - avgAmount) / avgAmount < 0.2)
-          if (!consistent) continue
-
-          const latest = items.sort((a, b) => b.date.localeCompare(a.date))[0]
-          results.push({
-            description: latest.description,
-            amount: avgAmount,
-            account: latest.account,
-            lastDate: latest.date,
-            monthsSeen: months.size,
-            category: latest.category,
-          })
-        }
-
-        return results.sort((a, b) => b.amount - a.amount)
-      }, [txs])
-
-      const totalRecurring = recurring.reduce((s, r) => s + r.amount, 0)
-
-      // Known fixed bills (hardcoded from the debt tracker context)
-      const FIXED = [
-        { name: "Mortgage / Rent", amount: 0, note: "Included in fixed bills figure" },
+      const BILLS = [
+        { name: "Rent (Sheila Ogilvie)", amount: 2800.00, account: "Monzo", category: "bills" },
+        { name: "School Fees (King William's)", amount: 1855.20, account: "Lloyds (Amanda)", category: "family" },
+        { name: "Cherry Godfrey (Loan)", amount: 610.98, account: "Lloyds", category: "bills" },
+        { name: "Manx Electricity", amount: 500.00, account: "Lloyds", category: "bills", note: "Includes arrears (~£6k debt)" },
+        { name: "Manx Telecom", amount: 500.00, account: "Lloyds", category: "bills", note: "Debt — paying £500/mo" },
+        { name: "Sure IOM (Phone/Broadband)", amount: 266.00, account: "Lloyds", category: "bills" },
+        { name: "Manx Gas", amount: 180.00, account: "Lloyds", category: "bills" },
+        { name: "Sky Digital", amount: 111.99, account: "Lloyds", category: "entertainment" },
+        { name: "Down South Hybrid (Gym)", amount: 100.00, account: "Monzo", category: "health" },
+        { name: "NFU Mutual (House Insurance)", amount: 43.09, account: "Monzo", category: "bills" },
+        { name: "M&S Sparks Pay", amount: 18.59, account: "Lloyds", category: "bills", note: "Debt" },
+        { name: "TV Licence", amount: 13.25, account: "Lloyds", category: "bills" },
+        { name: "Apple Subscriptions", amount: 12.98, account: "Monzo", category: "entertainment", note: "Multiple charges (iCloud, Apple TV, etc.)" },
+        { name: "ID Mobile (Lucas)", amount: 7.50, account: "Lloyds", category: "bills" },
+        { name: "O2 (Travel SIM)", amount: 8.00, account: "Monzo", category: "bills" },
+        { name: "Monzo Perks", amount: 7.00, account: "Monzo", category: "bills" },
+        { name: "D&G Appliance Care", amount: 5.99, account: "Monzo", category: "bills" },
+        { name: "Lloyds Account Fee", amount: 15.00, account: "Lloyds", category: "bills" },
       ]
+
+      const CANCEL = [
+        { name: "Xbox Game Pass", amount: 22.99, account: "Lloyds", category: "entertainment" },
+        { name: "GoCardless (GreenRunner)", amount: 2.20, account: "Monzo", category: "entertainment" },
+      ]
+
+      const totalBills = BILLS.reduce((s, b) => s + b.amount, 0)
+      const totalCancel = CANCEL.reduce((s, b) => s + b.amount, 0)
+
+      function BillRow({ bill, flagCancel }) {
+        return (
+          <div style={{
+            display: "grid", gridTemplateColumns: "1fr 100px 90px",
+            gap: 8, padding: "9px 12px", alignItems: "center",
+            borderBottom: "1px solid rgba(255,255,255,0.04)",
+            background: flagCancel ? "rgba(255,107,107,0.03)" : "transparent"
+          }}>
+            <div>
+              <div style={{ fontSize: 12, color: flagCancel ? "#ff8c69" : "#e2e8f0" }}>
+                {bill.name}
+                {flagCancel && <span style={{ marginLeft: 8, fontSize: 9, background: "rgba(255,107,107,0.15)", color: "#ff6b6b", borderRadius: 3, padding: "2px 6px" }}>CANCEL</span>}
+              </div>
+              <div style={{ fontSize: 10, color: "#374151" }}>
+                {bill.account}
+                {bill.note && <span style={{ marginLeft: 8, color: "#475569" }}>{bill.note}</span>}
+              </div>
+            </div>
+            <div>
+              <span style={{ fontSize: 9, color: CAT_COLORS[bill.category] || "#666", background: "rgba(255,255,255,0.04)", borderRadius: 3, padding: "2px 5px" }}>
+                {CAT_LABELS[bill.category] || bill.category}
+              </span>
+            </div>
+            <div style={{ fontFamily: "monospace", fontSize: 13, color: flagCancel ? "#ff8c69" : "#e2e8f0", textAlign: "right", fontWeight: 600 }}>
+              {fmt(bill.amount)}
+            </div>
+          </div>
+        )
+      }
 
       return (
         <div>
-          {loading ? (
-            <div style={{ textAlign: "center", padding: 40, color: "#475569" }}>Analysing transaction history...</div>
-          ) : (
-            <>
-              {/* Summary */}
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 20 }}>
-                <div style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 10, padding: "14px 16px" }}>
-                  <div style={{ fontSize: 10, color: "#475569", letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 6 }}>Fixed Bills (Budget)</div>
-                  <div style={{ fontSize: 20, fontWeight: 700, color: "#ff8c69", fontFamily: "monospace" }}>{fmt(FIXED_BILLS)}</div>
-                  <div style={{ fontSize: 10, color: "#374151", marginTop: 4 }}>Hardcoded in budget</div>
-                </div>
-                <div style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 10, padding: "14px 16px" }}>
-                  <div style={{ fontSize: 10, color: "#475569", letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 6 }}>Detected Recurring</div>
-                  <div style={{ fontSize: 20, fontWeight: 700, color: "#ffa94d", fontFamily: "monospace" }}>{fmt(totalRecurring)}</div>
-                  <div style={{ fontSize: 10, color: "#374151", marginTop: 4 }}>{recurring.length} recurring payments found</div>
-                </div>
-              </div>
+          {/* Summary */}
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10, marginBottom: 20 }}>
+            <div style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 10, padding: "14px 16px" }}>
+              <div style={{ fontSize: 10, color: "#475569", letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 6 }}>Monthly Committed</div>
+              <div style={{ fontSize: 20, fontWeight: 700, color: "#ff8c69", fontFamily: "monospace" }}>{fmt(totalBills)}</div>
+              <div style={{ fontSize: 10, color: "#374151", marginTop: 4 }}>{BILLS.length} payments</div>
+            </div>
+            <div style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 10, padding: "14px 16px" }}>
+              <div style={{ fontSize: 10, color: "#475569", letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 6 }}>To Cancel</div>
+              <div style={{ fontSize: 20, fontWeight: 700, color: "#ff6b6b", fontFamily: "monospace" }}>{fmt(totalCancel)}</div>
+              <div style={{ fontSize: 10, color: "#374151", marginTop: 4 }}>{CANCEL.length} subscriptions</div>
+            </div>
+            <div style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 10, padding: "14px 16px" }}>
+              <div style={{ fontSize: 10, color: "#475569", letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 6 }}>After Cancellations</div>
+              <div style={{ fontSize: 20, fontWeight: 700, color: "#69db7c", fontFamily: "monospace" }}>{fmt(totalBills - totalCancel)}</div>
+              <div style={{ fontSize: 10, color: "#374151", marginTop: 4 }}>saves {fmt(totalCancel)}/mo</div>
+            </div>
+          </div>
 
-              {/* Recurring payments */}
-              <div style={{ fontSize: 10, fontWeight: 600, color: "#475569", letterSpacing: "0.12em", textTransform: "uppercase", marginBottom: 10 }}>
-                Auto-Detected Recurring Payments
-              </div>
-              <div style={{ fontSize: 10, color: "#374151", marginBottom: 12 }}>
-                Based on last 3 months — same merchant, similar amount, appearing in 2+ months
-              </div>
+          {/* Bills list */}
+          <div style={{ fontSize: 10, fontWeight: 600, color: "#475569", letterSpacing: "0.12em", textTransform: "uppercase", marginBottom: 10 }}>
+            Monthly Committed Payments
+          </div>
 
-              {recurring.length === 0 ? (
-                <div style={{ textAlign: "center", padding: 30, color: "#374151", fontSize: 13 }}>
-                  Not enough transaction history yet. Import more statements to detect recurring payments.
-                </div>
-              ) : (
-                recurring.map((r, i) => (
-                  <div key={i} style={{ display: "grid", gridTemplateColumns: "1fr 80px 80px 60px", gap: 8, padding: "9px 12px", alignItems: "center", borderBottom: "1px solid rgba(255,255,255,0.04)" }}>
-                    <div>
-                      <div style={{ fontSize: 12, color: "#e2e8f0" }}>{r.description}</div>
-                      <div style={{ fontSize: 10, color: "#374151" }}>{r.account} · last: {r.lastDate}</div>
-                    </div>
-                    <div style={{ fontSize: 10, color: "#64748b", textAlign: "center" }}>
-                      {r.monthsSeen} months
-                    </div>
-                    <div>
-                      {r.category && (
-                        <span style={{ fontSize: 9, color: CAT_COLORS[r.category] || "#666", background: "rgba(255,255,255,0.04)", borderRadius: 3, padding: "2px 5px" }}>
-                          {CAT_LABELS[r.category] || r.category}
-                        </span>
-                      )}
-                    </div>
-                    <div style={{ fontFamily: "monospace", fontSize: 12, color: "#e2e8f0", textAlign: "right" }}>
-                      {fmt(r.amount)}
-                    </div>
-                  </div>
-                ))
-              )}
-            </>
+          {BILLS.map((b, i) => <BillRow key={i} bill={b} />)}
+
+          {/* Total row */}
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 100px 90px", gap: 8, padding: "10px 12px", borderTop: "1px solid rgba(255,255,255,0.08)" }}>
+            <div style={{ fontSize: 12, fontWeight: 700, color: "#94a3b8" }}>Total</div>
+            <div></div>
+            <div style={{ fontFamily: "monospace", fontSize: 14, color: "#ff8c69", textAlign: "right", fontWeight: 700 }}>{fmt(totalBills)}</div>
+          </div>
+
+          {/* To cancel */}
+          {CANCEL.length > 0 && (
+            <div style={{ marginTop: 30 }}>
+              <div style={{ fontSize: 10, fontWeight: 600, color: "#ff6b6b", letterSpacing: "0.12em", textTransform: "uppercase", marginBottom: 10 }}>
+                To Cancel
+              </div>
+              {CANCEL.map((b, i) => <BillRow key={i} bill={b} flagCancel />)}
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 100px 90px", gap: 8, padding: "10px 12px", borderTop: "1px solid rgba(255,255,255,0.08)" }}>
+                <div style={{ fontSize: 12, fontWeight: 700, color: "#94a3b8" }}>Potential saving</div>
+                <div></div>
+                <div style={{ fontFamily: "monospace", fontSize: 14, color: "#69db7c", textAlign: "right", fontWeight: 700 }}>{fmt(totalCancel)}/mo</div>
+              </div>
+            </div>
           )}
         </div>
       )
