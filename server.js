@@ -328,9 +328,16 @@ function parseHSBCCurrentTransactions(text) {
   let prevBalance = obMatch ? parseFloat(obMatch[1].replace(/,/g, '')) : null
 
   // Type codes used in HSBC statements
-  const TYPE_CODES = 'DD|VIS|\\)\\)\\)|BP|CHQ|TFR|ATM|FPI|FPO|BGC|SO|DEB|FEE|INT|PAY|CRE'
-  const txStart = new RegExp(`^(\\d{1,2}\\s+\\w{3}\\s+\\d{2})(${TYPE_CODES})(.*)$`)
-  const contType = new RegExp(`^(${TYPE_CODES})(.*)$`)
+  // Full list for dated lines (date prefix disambiguates)
+  const ALL_TYPES = 'DD|VIS|\\)\\)\\)|BP|CHQ|TFR|ATM|FPI|FPO|BGC|SO|DEB|FEE|INT|PAY|CRE|CR'
+  // Reduced list for continuation lines — exclude FEE/INT/PAY as they conflict
+  // with common description words (FEES, INTEREST, PAYMENT, FIRST PAYMENT)
+  const CONT_TYPES = 'DD|VIS|\\)\\)\\)|BP|CHQ|TFR|ATM|FPI|FPO|BGC|SO|DEB|CRE|CR'
+  const txStart = new RegExp(`^(\\d{1,2}\\s+\\w{3}\\s+\\d{2})(${ALL_TYPES})(.*)$`)
+  const contType = new RegExp(`^(${CONT_TYPES})(.*)$`)
+
+  // Credit type codes — these indicate income (positive amounts)
+  const CREDIT_TYPES = new Set(['CR', 'CRE'])
 
   // First pass: collect raw transaction blocks (date, type, concatenated text)
   const rawTxs = []
@@ -361,7 +368,7 @@ function parseHSBCCurrentTransactions(text) {
         j++
       }
 
-      rawTxs.push({ dateStr: lastDate, rest })
+      rawTxs.push({ dateStr: lastDate, typeCode, rest })
       i = j
       continue
     }
@@ -369,6 +376,7 @@ function parseHSBCCurrentTransactions(text) {
     // Check for continuation type code (same date as previous, e.g. ")))TESCO STORES")
     m = line.match(contType)
     if (m && lastDate) {
+      const typeCode = m[1]
       let rest = m[2]
       let j = i + 1
       while (j < lines.length) {
@@ -381,7 +389,7 @@ function parseHSBCCurrentTransactions(text) {
         j++
       }
 
-      rawTxs.push({ dateStr: lastDate, rest })
+      rawTxs.push({ dateStr: lastDate, typeCode, rest })
       i = j
       continue
     }
@@ -394,73 +402,118 @@ function parseHSBCCurrentTransactions(text) {
   // One amount:  "desc29.49"      → paid_out=29.49, no balance shown
   // Edge case:   "desc1194993010.000.16" → ref number bleeds into amounts
   //   Lookbehind catches this: only gets balance=0.16, computes amount from balance diff
+  // Sanity: any extracted amount > 10,000 is almost certainly a ref number bleed —
+  //   fall back to balance tracking
 
+  const MAX_SANE_AMOUNT = 10000
   const twoAmounts = /(?<=\D)(\d[\d,]*\.\d{2})(\d[\d,]*\.\d{2})$/
   const oneAmount = /(?<=\D)(\d[\d,]*\.\d{2})$/
 
   for (const raw of rawTxs) {
     let paidOut = null, paidIn = null, balance = null
     let description = raw.rest
+    let amountExtracted = false
 
+    // Try two-amounts match first
     let m = raw.rest.match(twoAmounts)
     if (m) {
       const amt1 = parseFloat(m[1].replace(/,/g, ''))
       const amt2 = parseFloat(m[2].replace(/,/g, ''))
 
-      // Sanity check: if first amount is unreasonably large (ref number bled in),
-      // fall through to one-amount extraction instead
-      if (amt1 > 50000) {
-        m = null  // Force fallback below
-      } else {
+      if (amt1 <= MAX_SANE_AMOUNT && amt2 <= MAX_SANE_AMOUNT) {
         balance = amt2
         description = raw.rest.slice(0, m.index).trim()
-
-        if (prevBalance !== null) {
-          if (balance < prevBalance) paidOut = amt1
-          else paidIn = amt1
+        // Use type code to determine direction — more reliable than balance comparison
+        if (CREDIT_TYPES.has(raw.typeCode)) {
+          paidIn = amt1
         } else {
           paidOut = amt1
         }
+        amountExtracted = true
       }
     }
 
-    if (!m) {
-      const wasAmountSanityFail = raw.rest.match(twoAmounts) !== null  // Had two amounts but first was too large
+    // Try one-amount match
+    if (!amountExtracted) {
       m = raw.rest.match(oneAmount)
       if (m) {
         const amt1 = parseFloat(m[1].replace(/,/g, ''))
-        description = raw.rest.slice(0, m.index).trim()
 
-        if (wasAmountSanityFail) {
-          // Two amounts found but first was a ref number — this single match is the balance
-          balance = amt1
+        if (amt1 <= MAX_SANE_AMOUNT) {
+          description = raw.rest.slice(0, m.index).trim()
+          // If twoAmounts matched but failed sanity, this single amount is likely the balance
+          const hadTwoButFailed = raw.rest.match(twoAmounts) !== null
+          if (hadTwoButFailed) {
+            balance = amt1
+          } else {
+            paidOut = amt1
+          }
+          amountExtracted = true
         } else {
-          // Genuinely one amount (no balance shown) — this is the paid_out
-          paidOut = amt1
+          // Amount is insane — ref number bled in. Use balance tracking.
+          // Try to extract description by removing everything after last letter
+          description = raw.rest.replace(/[^a-zA-Z]*$/, '').trim()
+          // Balance tracking will compute the amount below
         }
       }
     }
 
-    // Clean up description: remove trailing digits/dots left from ref numbers bleeding into amounts
-    description = description.replace(/[\d.]+$/, '').trim()
+    // Clean up description: remove trailing digits/dots/dashes/asterisks left from ref numbers
+    description = description.replace(/[\d.*\-]+$/, '').trim()
 
     if (!description) continue
+
+    // Determine if this is a credit (income) from the type code
+    const isCredit = CREDIT_TYPES.has(raw.typeCode)
 
     // Compute signed amount
     let amount
     if (balance !== null && prevBalance !== null && paidOut === null && paidIn === null) {
-      // Edge case: only got balance (ref number bled into amounts)
-      amount = balance - prevBalance  // Negative = outgoing, positive = incoming
+      amount = balance - prevBalance
+    } else if (isCredit && paidOut !== null) {
+      amount = paidOut
     } else if (paidIn !== null) {
       amount = paidIn
     } else if (paidOut !== null) {
       amount = -paidOut
+    } else if (!amountExtracted && prevBalance !== null) {
+      // No amount could be extracted (ref number bled in).
+      // Store as pending — we'll resolve from the next known balance.
+      txs.push({ date: parseBritishShortDate(raw.dateStr), description, amount: null, category: null, _pending: true, _isCredit: isCredit })
+      continue
     } else {
       continue
     }
 
-    // Update running balance
+    // Update running balance and resolve any pending transactions
     if (balance !== null) {
+      // Check for pending (unresolved) transactions before this one
+      const pending = []
+      while (txs.length && txs[txs.length - 1]._pending) {
+        pending.unshift(txs.pop())
+      }
+      if (pending.length > 0 && prevBalance !== null) {
+        // Total unaccounted change = new balance - what balance should be after known transactions
+        const totalPendingAmount = balance - prevBalance
+        if (pending.length === 1) {
+          pending[0].amount = totalPendingAmount
+          delete pending[0]._pending
+          delete pending[0]._isCredit
+        } else {
+          // Multiple pending — can't split, assign all to first as approximation
+          pending[0].amount = totalPendingAmount
+          delete pending[0]._pending
+          delete pending[0]._isCredit
+          for (let p = 1; p < pending.length; p++) {
+            pending[p].amount = 0
+            delete pending[p]._pending
+            delete pending[p]._isCredit
+          }
+        }
+        txs.push(...pending)
+      } else {
+        txs.push(...pending) // No prevBalance, can't resolve
+      }
       prevBalance = balance
     } else if (prevBalance !== null && amount !== null) {
       prevBalance = prevBalance + amount
@@ -473,7 +526,8 @@ function parseHSBCCurrentTransactions(text) {
     txs.push({ date, description, amount, category })
   }
 
-  return txs
+  // Remove any remaining unresolved pending transactions
+  return txs.filter(t => !t._pending && t.amount !== null)
 }
 
 // ── HSBC credit card parser ───────────────────────────────────
