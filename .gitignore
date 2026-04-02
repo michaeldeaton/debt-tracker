@@ -1,3 +1,7 @@
 node_modules/
 .env
 debt-tracker.db
+
+.claude/
+
+.DS_Store
